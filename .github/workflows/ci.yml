@@ -34,11 +34,12 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --features rustereum/testing
 
-      # The ownable-counter example depends on OpenZeppelin, which is NOT
-      # committed. Fetch it (git clone into lib/ + generate remappings.txt)
-      # before running the tests that compile it through solc.
+      # The OpenZeppelin examples depend on OZ sources, which are NOT committed.
+      # Fetch them ONCE into the shared examples/openzeppelin folder (git clone
+      # into lib/ + generate remappings.txt) before the tests that compile
+      # through solc.
       - name: Fetch example Solidity dependencies
-        working-directory: examples/ownable-counter
+        working-directory: examples/openzeppelin
         run: cargo run -q -p rustereum-cli -- fetch
 
       # Runs every crate's tests, including the revm end-to-end examples.

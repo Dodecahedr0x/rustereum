@@ -6,7 +6,10 @@ members = [
     "crates/rustereum-cli",
     "examples/counter",
     "examples/adder",
-    "examples/ownable-counter",
+    "examples/openzeppelin/ownable",
+    "examples/openzeppelin/pausable",
+    "examples/openzeppelin/reentrancy-guard",
+    "examples/openzeppelin/access-control",
 ]
 
 [workspace.dependencies]

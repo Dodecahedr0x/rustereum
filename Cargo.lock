@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "access-control"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "rustereum",
+]
+
+[[package]]
 name = "adder"
 version = "0.1.0"
 dependencies = [
@@ -2261,7 +2269,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
-name = "ownable-counter"
+name = "ownable"
 version = "0.1.0"
 dependencies = [
  "alloy-primitives",
@@ -2330,6 +2338,14 @@ name = "path-slash"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e91099d4268b0e11973f036e885d652fb0b21fedcf69738c627f94db6a44f42"
+
+[[package]]
+name = "pausable"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "rustereum",
+]
 
 [[package]]
 name = "percent-encoding"
@@ -2733,6 +2749,14 @@ dependencies = [
  "getrandom 0.2.17",
  "libredox",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "reentrancy-guard"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "rustereum",
 ]
 
 [[package]]

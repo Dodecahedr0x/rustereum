@@ -44,10 +44,14 @@ mod tests {
     fn ownable_counter_end_to_end() {
         let c = assemble_inheriting::<Counter>();
         // The OZ sources aren't committed — `rustereum fetch` (run in CI, or
-        // locally) clones them into `lib/` and writes `remappings.txt` at the
-        // crate root, which is this project's compilation root.
+        // locally) clones them into `lib/` and writes `remappings.txt` in the
+        // SHARED `examples/openzeppelin` folder (the parent of this crate),
+        // which is this project's compilation root.
         let opts = CompileOptions {
-            project_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            project_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .to_path_buf(),
         };
         let artifact = compile_contract_with(&c, &opts).expect("compile");
 
