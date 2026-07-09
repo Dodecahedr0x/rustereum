@@ -42,6 +42,7 @@ fn macro_ir_matches_handwritten() {
             mutates: true,
             params: vec![],
             ret: None,
+            modifiers: vec![],
             body: vec![Stmt::Assign {
                 target: Place::Storage("count".into()),
                 op: AssignOp::Add,
@@ -53,6 +54,7 @@ fn macro_ir_matches_handwritten() {
             mutates: false,
             params: vec![],
             ret: Some(Type::U256),
+            modifiers: vec![],
             body: vec![Stmt::Return(Expr::StorageLoad("count".into()))],
         },
     ];

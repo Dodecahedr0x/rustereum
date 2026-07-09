@@ -16,7 +16,9 @@ use crate::ir::{Contract, ContractMethods, ContractStorage};
 pub fn assemble<T: ContractStorage + ContractMethods>() -> Contract {
     Contract {
         name: <T as ContractStorage>::name(),
+        inherits: vec![],
         fields: <T as ContractStorage>::fields(),
+        constructor: <T as ContractMethods>::constructor(),
         methods: <T as ContractMethods>::methods(),
     }
 }

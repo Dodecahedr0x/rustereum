@@ -113,16 +113,19 @@ mod tests {
     fn counter() -> Contract {
         Contract {
             name: "Counter".into(),
+            inherits: vec![],
             fields: vec![Field {
                 name: "count".into(),
                 ty: Type::U256,
             }],
+            constructor: None,
             methods: vec![
                 Method {
                     name: "increment".into(),
                     mutates: true,
                     params: vec![],
                     ret: None,
+                    modifiers: vec![],
                     body: vec![Stmt::Assign {
                         target: Place::Storage("count".into()),
                         op: AssignOp::Add,
@@ -134,6 +137,7 @@ mod tests {
                     mutates: false,
                     params: vec![],
                     ret: Some(Type::U256),
+                    modifiers: vec![],
                     body: vec![Stmt::Return(Expr::StorageLoad("count".into()))],
                 },
             ],

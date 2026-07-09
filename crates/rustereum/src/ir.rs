@@ -1,31 +1,59 @@
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     U256,
+    Address,
+    Bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
     pub name: String,
     pub ty: Type,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Contract {
+/// A named, typed parameter for a method or constructor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Param {
     pub name: String,
-    pub fields: Vec<Field>,
-    pub methods: Vec<Method>,
+    pub ty: Type,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Method {
+/// A base contract this contract inherits from, with its import path and the
+/// argument expressions passed to its constructor (`Base(args...)`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Parent {
     pub name: String,
-    pub mutates: bool,
-    pub params: Vec<(String, Type)>,
-    pub ret: Option<Type>,
+    pub import_path: String,
+    pub base_args: Vec<String>,
+}
+
+/// A contract constructor with its parameters and body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Constructor {
+    pub params: Vec<Param>,
     pub body: Vec<Stmt>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Contract {
+    pub name: String,
+    pub inherits: Vec<Parent>,
+    pub fields: Vec<Field>,
+    pub constructor: Option<Constructor>,
+    pub methods: Vec<Method>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Method {
+    pub name: String,
+    pub mutates: bool,
+    pub params: Vec<Param>,
+    pub ret: Option<Type>,
+    pub modifiers: Vec<String>,
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Assign {
         target: Place,
@@ -36,12 +64,12 @@ pub enum Stmt {
     ExprStmt(Expr),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Place {
     Storage(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     StorageLoad(String),
     Literal(u64),
@@ -52,13 +80,13 @@ pub enum Expr {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssignOp {
     Set,
     Add,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinOp {
     Add,
 }
@@ -70,6 +98,13 @@ pub trait ContractStorage {
 
 pub trait ContractMethods {
     fn methods() -> Vec<Method>;
+    fn constructor() -> Option<Constructor> {
+        None
+    }
+}
+
+pub trait ContractInherits {
+    fn parents() -> Vec<Parent>;
 }
 
 #[cfg(test)]
@@ -97,16 +132,19 @@ mod tests {
     fn counter_contract() -> Contract {
         Contract {
             name: "Counter".into(),
+            inherits: vec![],
             fields: vec![Field {
                 name: "count".into(),
                 ty: Type::U256,
             }],
+            constructor: None,
             methods: vec![
                 Method {
                     name: "increment".into(),
                     mutates: true,
                     params: vec![],
                     ret: None,
+                    modifiers: vec![],
                     body: vec![Stmt::Assign {
                         target: Place::Storage("count".into()),
                         op: AssignOp::Add,
@@ -118,9 +156,49 @@ mod tests {
                     mutates: false,
                     params: vec![],
                     ret: Some(Type::U256),
+                    modifiers: vec![],
                     body: vec![Stmt::Return(Expr::StorageLoad("count".into()))],
                 },
             ],
         }
+    }
+
+    #[test]
+    fn ir_supports_inheritance_and_constructor() {
+        let c = Contract {
+            name: "Counter".into(),
+            inherits: vec![Parent {
+                name: "Ownable".into(),
+                import_path: "@openzeppelin/contracts/access/Ownable.sol".into(),
+                base_args: vec!["initial_owner".into()],
+            }],
+            fields: vec![Field {
+                name: "count".into(),
+                ty: Type::U256,
+            }],
+            constructor: Some(Constructor {
+                params: vec![Param {
+                    name: "initial_owner".into(),
+                    ty: Type::Address,
+                }],
+                body: vec![],
+            }),
+            methods: vec![Method {
+                name: "increment".into(),
+                params: vec![],
+                mutates: true,
+                ret: None,
+                modifiers: vec!["onlyOwner".into()],
+                body: vec![Stmt::Assign {
+                    target: Place::Storage("count".into()),
+                    op: AssignOp::Add,
+                    value: Expr::Literal(1),
+                }],
+            }],
+        };
+        assert_eq!(c.inherits[0].name, "Ownable");
+        assert_eq!(c.inherits[0].base_args, vec!["initial_owner".to_string()]);
+        assert_eq!(c.constructor.as_ref().unwrap().params[0].ty, Type::Address);
+        assert_eq!(c.methods[0].modifiers, vec!["onlyOwner".to_string()]);
     }
 }

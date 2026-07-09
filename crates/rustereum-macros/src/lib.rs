@@ -174,6 +174,7 @@ fn lower_method(m: &syn::ImplItemFn) -> Result<TokenStream2, syn::Error> {
             mutates: #mutates,
             params: vec![],
             ret: #ret,
+            modifiers: vec![],
             body: vec![ #(#body),* ],
         }
     })
