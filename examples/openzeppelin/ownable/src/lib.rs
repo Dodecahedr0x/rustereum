@@ -35,20 +35,14 @@ impl Counter {
 #[cfg(test)]
 mod tests {
     use super::Counter;
-    use rustereum::driver::CompileOptions;
     use rustereum::testing::InMemoryDB;
     use rustereum::vm::{Address, U256};
 
     #[test]
     fn ownable_counter_end_to_end() {
-        // The OZ sources aren't committed — `rustereum fetch` (run in CI, or
-        // locally) clones them into this crate's own `lib/` and writes
-        // `remappings.txt` beside its `rustereum.toml`, which is this project's
-        // compilation root.
-        let opts = CompileOptions {
-            project_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
-        };
-        let artifact = Counter::compile_with(&opts).expect("compile");
+        // `Counter::compile()` uses this crate's dir as the project root, where
+        // `rustereum fetch` cloned the OZ sources into `lib/` + `remappings.txt`.
+        let artifact = Counter::compile().expect("compile");
 
         // Owner is DISTINCT from the deployer so the test proves the
         // constructor arg — not the deployer — becomes the owner.

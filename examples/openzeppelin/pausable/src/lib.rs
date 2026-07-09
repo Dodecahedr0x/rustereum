@@ -30,19 +30,14 @@ impl Counter {
 #[cfg(test)]
 mod tests {
     use super::Counter;
-    use rustereum::driver::CompileOptions;
     use rustereum::testing::InMemoryDB;
     use rustereum::vm::{DEPLOYER, U256};
 
     #[test]
     fn pausable_counter_end_to_end() {
-        // The OZ sources aren't committed — `rustereum fetch` clones them into
-        // this crate's own `lib/` and writes `remappings.txt` beside its
-        // `rustereum.toml`, which is this project's compilation root.
-        let opts = CompileOptions {
-            project_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
-        };
-        let artifact = Counter::compile_with(&opts).expect("compile");
+        // `Counter::compile()` uses this crate's dir as the project root, where
+        // `rustereum fetch` cloned the OZ sources into `lib/` + `remappings.txt`.
+        let artifact = Counter::compile().expect("compile");
 
         let mut evm = InMemoryDB::default();
         let counter = Counter::deploy(&mut evm, &artifact);

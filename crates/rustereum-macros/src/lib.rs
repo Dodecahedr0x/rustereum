@@ -505,17 +505,17 @@ fn build_client(self_ty: &syn::Type, i: &syn::ItemImpl) -> Result<TokenStream2, 
         }
 
         impl #name_ident {
-            /// Assemble and compile this contract to an EVM artifact using the
-            /// default project root (the current working directory).
+            /// Assemble and compile this contract to an EVM artifact. The
+            /// project root (where `lib/` and `remappings.txt` live) defaults to
+            /// the contract crate's directory (`CARGO_MANIFEST_DIR`), which is
+            /// what `rustereum fetch` populates. Use [`compile_with`] to override.
             pub fn compile() -> ::core::result::Result<
                 ::rustereum::driver::Artifact,
                 ::rustereum::driver::CompileError,
             > {
-                let __ir = ::rustereum::assemble_from::<#name_ident>({
-                    use ::rustereum::InheritsFallback as _;
-                    ::rustereum::InheritsProbe::<#name_ident>(::core::marker::PhantomData).rustereum_parents()
-                });
-                ::rustereum::driver::compile_contract(&__ir)
+                #name_ident::compile_with(&::rustereum::driver::CompileOptions {
+                    project_root: ::std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+                })
             }
 
             /// Like [`compile`], but resolves Solidity imports using the given
