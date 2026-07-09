@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/rustereum", "crates/rustereum-macros", "examples"]
+
+[workspace.dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+alloy-primitives = "0.8"
+tiny-keccak = { version = "2", features = ["keccak"] }
+foundry-compilers = "0.11"
+revm = "14"

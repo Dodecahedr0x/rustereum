@@ -1,0 +1,13 @@
+[package]
+name = "rustereum"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rustereum-macros = { path = "../rustereum-macros" }
+alloy-primitives = { workspace = true }
+tiny-keccak = { workspace = true }
+foundry-compilers = { workspace = true }
+
+[dev-dependencies]
+revm = { workspace = true }
