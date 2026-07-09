@@ -21,7 +21,7 @@ impl Counter {
     #[constructor(Ownable(initial_owner))]
     pub fn new(initial_owner: Address) {}
 
-    #[modifier(onlyOwner)]
+    #[modifier(only_owner)]
     pub fn increment(&mut self) {
         self.count += 1;
     }
@@ -53,7 +53,7 @@ fn constructor_and_modifier_captured() {
     // constructor excluded from methods
     assert!(methods.iter().all(|m| m.name != "new"));
     let inc = methods.iter().find(|m| m.name == "increment").unwrap();
-    assert_eq!(inc.modifiers, vec!["onlyOwner".to_string()]);
+    assert_eq!(inc.modifiers, vec!["only_owner".to_string()]);
 }
 
 #[test]

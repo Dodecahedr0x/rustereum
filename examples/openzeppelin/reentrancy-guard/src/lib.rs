@@ -18,7 +18,7 @@ impl ReentrancyGuard for Counter {}
 #[contract]
 impl Counter {
     // `ReentrancyGuard` has no constructor, so this contract needs none either.
-    #[modifier(nonReentrant)]
+    #[modifier(non_reentrant)]
     pub fn increment(&mut self) {
         self.count += 1;
     }

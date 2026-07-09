@@ -17,7 +17,7 @@ impl Pausable for Counter {}
 #[contract]
 impl Counter {
     // `Pausable` has no constructor, so this contract needs none either.
-    #[modifier(whenNotPaused)]
+    #[modifier(when_not_paused)]
     pub fn increment(&mut self) {
         self.count += 1;
     }

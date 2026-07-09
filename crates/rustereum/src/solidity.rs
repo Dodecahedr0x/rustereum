@@ -2,8 +2,8 @@ use crate::ir::{AssignOp, BinOp, Constructor, Contract, Expr, Method, Parent, Pl
 
 /// Lower a `Contract` IR to Solidity source, including inheritance
 /// (imports + `is Parent`), an optional constructor with base initializers,
-/// and per-method modifiers. rustereum identifiers are converted to camelCase;
-/// parent and modifier names are emitted verbatim.
+/// and per-method modifiers. rustereum identifiers (including modifier names)
+/// are converted to camelCase; parent contract names are emitted verbatim.
 pub fn lower_solidity(c: &Contract) -> String {
     let mut out = String::new();
     out.push_str("// SPDX-License-Identifier: MIT\n");
@@ -125,7 +125,9 @@ fn lower_method(m: &Method) -> String {
         sig.push_str(" view");
     }
     for modifier in &m.modifiers {
-        sig.push_str(&format!(" {}", modifier));
+        // Modifiers are written snake_case in the DSL and camelCased here to
+        // match the inherited Solidity modifier name (e.g. only_owner → onlyOwner).
+        sig.push_str(&format!(" {}", to_camel_case(modifier)));
     }
     if let Some(ret) = &m.ret {
         sig.push_str(&format!(" returns ({})", sol_type(ret)));
@@ -241,7 +243,7 @@ mod tests {
                     params: vec![],
                     mutates: true,
                     ret: None,
-                    modifiers: vec!["onlyOwner".into()],
+                    modifiers: vec!["only_owner".into()],
                     body: vec![Stmt::Assign {
                         target: Place::Storage("count".into()),
                         op: AssignOp::Add,
@@ -273,7 +275,8 @@ mod tests {
 
     #[test]
     fn camel_cases_identifiers() {
-        // A field and param in snake_case become camelCase; parent/modifier names stay verbatim.
+        // A field and param in snake_case become camelCase; the snake_case
+        // modifier only_owner is camelCased to onlyOwner; parent names stay verbatim.
         let mut c = ownable_counter();
         c.fields[0].name = "total_count".into();
         c.methods[1].body = vec![Stmt::Return(Expr::StorageLoad("total_count".into()))];
@@ -281,6 +284,6 @@ mod tests {
         assert!(src.contains("uint256 totalCount;"));
         assert!(src.contains("return totalCount;")); // body ref camelCased consistently
         assert!(src.contains("Ownable")); // parent name verbatim
-        assert!(src.contains("onlyOwner")); // modifier verbatim
+        assert!(src.contains("onlyOwner")); // snake_case only_owner → camelCase onlyOwner
     }
 }

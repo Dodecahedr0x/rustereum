@@ -22,7 +22,7 @@ impl Counter {
     #[allow(unused_variables)]
     pub fn new(initial_owner: Address) {}
 
-    #[modifier(onlyOwner)]
+    #[modifier(only_owner)]
     pub fn increment(&mut self) {
         self.count += 1;
     }
