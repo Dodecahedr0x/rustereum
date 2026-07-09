@@ -45,13 +45,10 @@ mod tests {
     fn access_control_counter_end_to_end() {
         let c = assemble_inheriting::<Counter>();
         // The OZ sources aren't committed — `rustereum fetch` clones them into
-        // `lib/` and writes `remappings.txt` in the SHARED `examples/openzeppelin`
-        // folder (the parent of this crate), which is the compilation root.
+        // this crate's own `lib/` and writes `remappings.txt` beside its
+        // `rustereum.toml`, which is this project's compilation root.
         let opts = CompileOptions {
-            project_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .to_path_buf(),
+            project_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
         };
         let artifact = compile_contract_with(&c, &opts).expect("compile");
 

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use rustereum_cli::{add_dependency, fetch, find_manifest_root, find_project_root, scaffold_new};
+use rustereum_cli::{add_dependency, fetch, find_manifest_root, scaffold_new};
 
 #[derive(Parser)]
 #[command(
@@ -52,7 +52,7 @@ fn main() -> ExitCode {
             git_ref,
         } => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            let root = find_project_root(&cwd);
+            let root = find_manifest_root(&cwd);
             add_dependency(&root, &github_spec, git_ref.as_deref()).map(|_| {
                 println!("Added {github_spec} to {}", root.display());
             })

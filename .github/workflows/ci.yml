@@ -35,12 +35,17 @@ jobs:
         run: cargo clippy --workspace --all-targets --features rustereum/testing
 
       # The OpenZeppelin examples depend on OZ sources, which are NOT committed.
-      # Fetch them ONCE into the shared examples/openzeppelin folder (git clone
-      # into lib/ + generate remappings.txt) before the tests that compile
-      # through solc.
+      # Each example project has its own rustereum.toml; fetch clones its deps
+      # into that project's own lib/ and generates its remappings.txt before the
+      # tests that compile through solc.
       - name: Fetch example Solidity dependencies
-        working-directory: examples/openzeppelin
-        run: cargo run -q -p rustereum-cli -- fetch
+        run: |
+          for dir in examples/openzeppelin/*/; do
+            if [ -f "${dir}rustereum.toml" ]; then
+              echo "Fetching deps for ${dir}"
+              (cd "$dir" && cargo run -q -p rustereum-cli -- fetch)
+            fi
+          done
 
       # Runs every crate's tests, including the revm end-to-end examples.
       # solc is downloaded on demand by foundry-compilers.

@@ -11,10 +11,10 @@ fn new_scaffolds_project() {
     let root = tmp.path().join("myproj");
     scaffold_new(&root, "myproj", false).unwrap();
     assert!(root.join("Cargo.toml").exists());
+    assert!(root.join("rustereum.toml").exists());
+    assert!(root.join(".gitignore").exists());
     assert!(root.join("src/lib.rs").exists());
-    assert!(root.join("remappings.txt").exists());
     assert!(root.join("src/bindings.rs").exists());
-    assert!(root.join("lib").is_dir());
 }
 
 #[test]
