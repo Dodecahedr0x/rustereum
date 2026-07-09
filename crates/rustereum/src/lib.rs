@@ -1,7 +1,8 @@
 pub mod driver; // implemented in a later task
 pub mod ir; // implemented in a later task
 pub mod lower; // implemented in a later task
-pub mod testing; // implemented in a later task
+#[cfg(feature = "testing")]
+pub mod testing;
 
 pub mod prelude {
     pub use crate::u256;
