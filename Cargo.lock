@@ -6,7 +6,6 @@ version = 4
 name = "access-control"
 version = "0.1.0"
 dependencies = [
- "alloy-primitives",
  "rustereum",
 ]
 
@@ -14,7 +13,6 @@ dependencies = [
 name = "adder"
 version = "0.1.0"
 dependencies = [
- "alloy-primitives",
  "rustereum",
 ]
 
@@ -848,7 +846,6 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 name = "counter"
 version = "0.1.0"
 dependencies = [
- "alloy-primitives",
  "rustereum",
 ]
 
@@ -2272,7 +2269,6 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 name = "ownable"
 version = "0.1.0"
 dependencies = [
- "alloy-primitives",
  "rustereum",
 ]
 
@@ -2343,7 +2339,6 @@ checksum = "1e91099d4268b0e11973f036e885d652fb0b21fedcf69738c627f94db6a44f42"
 name = "pausable"
 version = "0.1.0"
 dependencies = [
- "alloy-primitives",
  "rustereum",
 ]
 
@@ -2755,7 +2750,6 @@ dependencies = [
 name = "reentrancy-guard"
 version = "0.1.0"
 dependencies = [
- "alloy-primitives",
  "rustereum",
 ]
 

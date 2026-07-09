@@ -24,25 +24,20 @@ impl Counter {
 #[cfg(test)]
 mod tests {
     use super::Counter;
-    use alloy_primitives::U256;
     use rustereum::assemble;
     use rustereum::driver::compile_contract;
-    use rustereum::testing::TestEvm;
+    use rustereum::testing::InMemoryDB;
+    use rustereum::vm::{DEPLOYER, U256};
 
     #[test]
     fn counter_end_to_end() {
-        let contract = assemble::<Counter>();
-        let artifact = compile_contract(&contract).expect("compile");
-
-        // Inspectable Yul artifact is written to target/rustereum/.
-        assert!(artifact.yul_path.exists());
-
-        let mut evm = TestEvm::new();
-        let addr = evm.deploy(&artifact.bytecode);
-        assert_eq!(evm.call_u256(addr, "get()"), U256::from(0));
-        evm.call(addr, "increment()");
-        assert_eq!(evm.call_u256(addr, "get()"), U256::from(1));
-        evm.call(addr, "increment()");
-        assert_eq!(evm.call_u256(addr, "get()"), U256::from(2));
+        let art = compile_contract(&assemble::<Counter>()).expect("compile");
+        let mut evm = InMemoryDB::default();
+        let counter = Counter::deploy(&mut evm, &art);
+        assert_eq!(counter.get(&mut evm), U256::from(0));
+        counter.increment(&mut evm, DEPLOYER).unwrap();
+        assert_eq!(counter.get(&mut evm), U256::from(1));
+        counter.increment(&mut evm, DEPLOYER).unwrap();
+        assert_eq!(counter.get(&mut evm), U256::from(2));
     }
 }

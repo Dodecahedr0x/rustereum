@@ -35,14 +35,13 @@ impl Counter {
 #[cfg(test)]
 mod tests {
     use super::Counter;
-    use alloy_primitives::{Address, U256};
     use rustereum::assemble_inheriting;
     use rustereum::driver::{compile_contract_with, CompileOptions};
-    use rustereum::testing::{TestEvm, Token};
+    use rustereum::testing::InMemoryDB;
+    use rustereum::vm::{Address, U256};
 
     #[test]
     fn ownable_counter_end_to_end() {
-        let c = assemble_inheriting::<Counter>();
         // The OZ sources aren't committed — `rustereum fetch` (run in CI, or
         // locally) clones them into this crate's own `lib/` and writes
         // `remappings.txt` beside its `rustereum.toml`, which is this project's
@@ -50,25 +49,25 @@ mod tests {
         let opts = CompileOptions {
             project_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
         };
-        let artifact = compile_contract_with(&c, &opts).expect("compile");
+        let artifact =
+            compile_contract_with(&assemble_inheriting::<Counter>(), &opts).expect("compile");
 
-        // Owner is DISTINCT from the deployer ([0x11..]) so the test proves the
+        // Owner is DISTINCT from the deployer so the test proves the
         // constructor arg — not the deployer — becomes the owner.
         let owner = Address::from([0x33u8; 20]);
         let stranger = Address::from([0x22u8; 20]);
 
-        let mut evm = TestEvm::new();
-        evm.fund(owner);
-        evm.fund(stranger);
-        let addr = evm.deploy_with(&artifact.bytecode, &[Token::Address(owner)]);
+        let mut evm = InMemoryDB::default();
+        let counter = Counter::deploy(&mut evm, &artifact, owner);
 
-        assert_eq!(evm.call_u256(addr, "get()"), U256::from(0));
-        evm.call_from(owner, addr, "increment()")
+        assert_eq!(counter.get(&mut evm), U256::from(0));
+        counter
+            .increment(&mut evm, owner)
             .expect("owner should succeed");
-        assert_eq!(evm.call_u256(addr, "get()"), U256::from(1));
+        assert_eq!(counter.get(&mut evm), U256::from(1));
 
-        // A non-owner (including the deployer [0x11..]) is rejected.
-        assert!(evm.call_from(stranger, addr, "increment()").is_err());
-        assert_eq!(evm.call_u256(addr, "get()"), U256::from(1));
+        // A non-owner is rejected by onlyOwner.
+        assert!(counter.increment(&mut evm, stranger).is_err());
+        assert_eq!(counter.get(&mut evm), U256::from(1));
     }
 }

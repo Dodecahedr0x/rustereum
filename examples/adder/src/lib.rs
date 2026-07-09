@@ -26,25 +26,20 @@ impl Adder {
 #[cfg(test)]
 mod tests {
     use super::Adder;
-    use alloy_primitives::U256;
     use rustereum::assemble;
     use rustereum::driver::compile_contract;
-    use rustereum::testing::TestEvm;
+    use rustereum::testing::InMemoryDB;
+    use rustereum::vm::{DEPLOYER, U256};
 
     #[test]
     fn adder_end_to_end() {
-        let contract = assemble::<Adder>();
-        let artifact = compile_contract(&contract).expect("compile");
-        assert!(artifact.yul_path.exists());
-
-        let mut evm = TestEvm::new();
-        let addr = evm.deploy(&artifact.bytecode);
-        assert_eq!(evm.call_u256(addr, "get()"), U256::from(0));
-        // The method `add_ten` lowers to the camelCase Solidity function
-        // `addTen`, so the ABI selector uses the camelCase name.
-        evm.call(addr, "addTen()");
-        assert_eq!(evm.call_u256(addr, "get()"), U256::from(10));
-        evm.call(addr, "addTen()");
-        assert_eq!(evm.call_u256(addr, "get()"), U256::from(20));
+        let art = compile_contract(&assemble::<Adder>()).expect("compile");
+        let mut evm = InMemoryDB::default();
+        let adder = Adder::deploy(&mut evm, &art);
+        assert_eq!(adder.get(&mut evm), U256::from(0));
+        adder.add_ten(&mut evm, DEPLOYER).unwrap();
+        assert_eq!(adder.get(&mut evm), U256::from(10));
+        adder.add_ten(&mut evm, DEPLOYER).unwrap();
+        assert_eq!(adder.get(&mut evm), U256::from(20));
     }
 }
