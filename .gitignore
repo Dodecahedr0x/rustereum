@@ -1,2 +1,6 @@
 /target
 target/
+
+# Fetched Solidity deps for example projects (populated by `rustereum fetch`)
+examples/*/lib/
+examples/*/remappings.txt

@@ -1,0 +1,8 @@
+# Solidity dependencies for this example. Run `rustereum fetch` to clone them
+# into `lib/` (git-ignored) and generate `remappings.txt`. The imported sources
+# are NOT committed — they are fetched when building the project.
+
+[dependencies.openzeppelin-contracts]
+git = "https://github.com/OpenZeppelin/openzeppelin-contracts"
+rev = "v5.1.0"
+remap = "@openzeppelin/contracts/=contracts/"
