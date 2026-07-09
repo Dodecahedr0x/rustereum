@@ -1,0 +1,5 @@
+error: rustereum: unsupported expression in v1; only self.<field>, integer literals, and + are supported
+  --> tests/ui/let_binding.rs:11:9
+   |
+11 |         let _y = 1;
+   |         ^^^^^^^^^^^

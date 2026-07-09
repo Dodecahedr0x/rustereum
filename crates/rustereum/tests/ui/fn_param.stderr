@@ -1,0 +1,5 @@
+error: rustereum: function parameters are not supported in v1
+  --> tests/ui/fn_param.rs:10:27
+   |
+10 |     pub fn set(&mut self, x: u256) {
+   |                           ^^^^^^^

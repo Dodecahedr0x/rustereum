@@ -1,0 +1,5 @@
+error: rustereum: unsupported return type; only u256 is supported in v1
+  --> tests/ui/return_type.rs:10:24
+   |
+10 |     pub fn f(&self) -> bool {
+   |                        ^^^^

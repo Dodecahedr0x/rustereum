@@ -1,0 +1,5 @@
+error: rustereum: unsupported field type; only u256 is supported in v1
+ --> tests/ui/field_type.rs:5:8
+  |
+5 |     x: u128,
+  |        ^^^^

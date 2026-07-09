@@ -14,3 +14,6 @@ revm = { workspace = true, optional = true }
 
 [features]
 testing = ["dep:revm"]
+
+[dev-dependencies]
+trybuild = "1"
