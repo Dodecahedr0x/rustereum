@@ -51,10 +51,84 @@ fn target_dir() -> PathBuf {
     dir
 }
 
+/// Options controlling how a contract is compiled: primarily the project root
+/// used to resolve Solidity imports (via `remappings.txt`) against vendored
+/// dependency sources (e.g. OpenZeppelin).
+pub struct CompileOptions {
+    pub project_root: PathBuf,
+}
+
 /// Lower `c` to Solidity, write it to disk, then compile it to EVM bytecode via
 /// foundry-compilers (solc, standard-JSON `language: "Solidity"`). The
 /// solc-generated Yul (IR) is dumped alongside for inspection.
+///
+/// The project root is discovered by searching upward from the current
+/// directory for a `remappings.txt`; if none is found the current directory is
+/// used (standalone contracts need no remappings).
 pub fn compile_contract(c: &Contract) -> Result<Artifact, CompileError> {
+    let project_root = find_project_root();
+    compile_contract_with(c, &CompileOptions { project_root })
+}
+
+/// Read `remappings.txt` under `root`, returning `prefix=<absolute target>`
+/// strings suitable for solc's `settings.remappings`. Missing or empty files
+/// yield an empty list. Targets are made absolute (joined onto `root` and
+/// canonicalized when possible) so solc resolves imports regardless of cwd.
+fn read_remappings(root: &std::path::Path) -> Vec<String> {
+    let path = root.join("remappings.txt");
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    contents
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .filter_map(|line| {
+            let (prefix, target) = line.split_once('=')?;
+            let target = target.trim();
+            let joined = root.join(target);
+            let mut abs = std::fs::canonicalize(&joined)
+                .unwrap_or(joined)
+                .display()
+                .to_string();
+            // solc does a textual prefix replacement, so a remapping whose
+            // prefix ends in `/` needs a target that also ends in `/` (else
+            // `@oz/contracts/` + `access/..` -> `contractsaccess/..`).
+            // canonicalize drops trailing separators; restore one to match.
+            if target.ends_with('/') && !abs.ends_with('/') {
+                abs.push('/');
+            }
+            Some(format!("{}={}", prefix.trim(), abs))
+        })
+        .collect()
+}
+
+/// Search upward from the current directory for a directory containing
+/// `remappings.txt`, returning it as the project root. Falls back to the
+/// current directory (or `.`) when none is found.
+fn find_project_root() -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut dir = cwd.as_path();
+    loop {
+        if dir.join("remappings.txt").is_file() {
+            return dir.to_path_buf();
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => break,
+        }
+    }
+    cwd
+}
+
+/// Like [`compile_contract`], but resolves Solidity imports using the project's
+/// `remappings.txt` (under `opts.project_root`), with remapping targets made
+/// absolute so vendored dependency sources (e.g. OpenZeppelin) are found.
+pub fn compile_contract_with(
+    c: &Contract,
+    opts: &CompileOptions,
+) -> Result<Artifact, CompileError> {
     let sol = crate::solidity::lower_solidity(c);
 
     // Write the Solidity FIRST so a later solc failure still leaves it for
@@ -63,19 +137,31 @@ pub fn compile_contract(c: &Contract) -> Result<Artifact, CompileError> {
     let sol_path = dir.join(format!("{}.sol", c.name));
     std::fs::write(&sol_path, &sol)?;
 
+    let remappings = read_remappings(&opts.project_root);
+
     let source_name = format!("{}.sol", c.name);
     let input = serde_json::json!({
         "language": "Solidity",
         "sources": { source_name.clone(): { "content": sol } },
         "settings": {
             "outputSelection": { "*": { "*": ["evm.bytecode.object", "abi", "ir"] } },
-            "optimizer": { "enabled": true }
+            "optimizer": { "enabled": true },
+            "remappings": remappings,
         }
     });
 
     let version = Version::parse(SOLC_VERSION).expect("SOLC_VERSION is valid semver");
-    let solc = Solc::find_or_install(&version)
+    let mut solc = Solc::find_or_install(&version)
         .map_err(|e| CompileError::Solc(format!("could not obtain solc: {e}")))?;
+
+    // Let solc read the vendored dependency sources that the (absolute)
+    // remapping targets point at. Without this, solc reports "File not found"
+    // for imports that resolve outside its default sandbox.
+    if !remappings.is_empty() {
+        let root =
+            std::fs::canonicalize(&opts.project_root).unwrap_or_else(|_| opts.project_root.clone());
+        solc.allow_paths.insert(root);
+    }
 
     let output: serde_json::Value = solc.compile_as(&input).map_err(|e| {
         CompileError::Solc(format!(
@@ -97,10 +183,18 @@ pub fn compile_contract(c: &Contract) -> Result<Artifact, CompileError> {
             })
             .collect();
         if !fatal.is_empty() {
+            let joined = fatal.join("\n");
+            let hint = if joined.contains("File not found")
+                || joined.contains("not found: File")
+                || joined.contains("Source \"")
+            {
+                " ; did you run 'rustereum add'? (missing remapping or dependency)"
+            } else {
+                ""
+            };
             return Err(CompileError::Solc(format!(
-                "{}; inspect target/rustereum/{}.sol",
-                fatal.join("\n"),
-                c.name
+                "{}; inspect target/rustereum/{}.sol{}",
+                joined, c.name, hint
             )));
         }
     }
@@ -215,6 +309,62 @@ mod tests {
                 },
             ],
         }
+    }
+
+    fn ownable_counter() -> Contract {
+        Contract {
+            name: "Counter".into(),
+            inherits: vec![Parent {
+                name: "Ownable".into(),
+                import_path: "@openzeppelin/contracts/access/Ownable.sol".into(),
+                base_args: vec!["initial_owner".into()],
+            }],
+            fields: vec![Field {
+                name: "count".into(),
+                ty: Type::U256,
+            }],
+            constructor: Some(Constructor {
+                params: vec![Param {
+                    name: "initial_owner".into(),
+                    ty: Type::Address,
+                }],
+                body: vec![],
+            }),
+            methods: vec![
+                Method {
+                    name: "increment".into(),
+                    mutates: true,
+                    params: vec![],
+                    ret: None,
+                    modifiers: vec!["onlyOwner".into()],
+                    body: vec![Stmt::Assign {
+                        target: Place::Storage("count".into()),
+                        op: AssignOp::Add,
+                        value: Expr::Literal(1),
+                    }],
+                },
+                Method {
+                    name: "get".into(),
+                    mutates: false,
+                    params: vec![],
+                    ret: Some(Type::U256),
+                    modifiers: vec![],
+                    body: vec![Stmt::Return(Expr::StorageLoad("count".into()))],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn compiles_inheriting_contract_with_remappings() {
+        let opts = CompileOptions {
+            project_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/project"),
+        };
+        let artifact = compile_contract_with(&ownable_counter(), &opts).expect("compile");
+        assert!(!artifact.bytecode.is_empty());
+        // ABI includes the inherited owner() function.
+        assert!(artifact.abi.to_string().contains("owner"));
     }
 
     #[test]
