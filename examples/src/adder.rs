@@ -40,9 +40,11 @@ mod tests {
         let mut evm = TestEvm::new();
         let addr = evm.deploy(&artifact.bytecode);
         assert_eq!(evm.call_u256(addr, "get()"), U256::from(0));
-        evm.call(addr, "add_ten()");
+        // The method `add_ten` lowers to the camelCase Solidity function
+        // `addTen`, so the ABI selector uses the camelCase name.
+        evm.call(addr, "addTen()");
         assert_eq!(evm.call_u256(addr, "get()"), U256::from(10));
-        evm.call(addr, "add_ten()");
+        evm.call(addr, "addTen()");
         assert_eq!(evm.call_u256(addr, "get()"), U256::from(20));
     }
 }

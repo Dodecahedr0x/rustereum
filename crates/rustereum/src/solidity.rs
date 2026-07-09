@@ -1,27 +1,105 @@
-use crate::ir::{AssignOp, BinOp, Contract, Expr, Method, Place, Stmt, Type};
+use crate::ir::{AssignOp, BinOp, Constructor, Contract, Expr, Method, Parent, Place, Stmt, Type};
 
-/// Lower a standalone (non-inheritance) `Contract` IR to Solidity source.
+/// Lower a `Contract` IR to Solidity source, including inheritance
+/// (imports + `is Parent`), an optional constructor with base initializers,
+/// and per-method modifiers. rustereum identifiers are converted to camelCase;
+/// parent and modifier names are emitted verbatim.
 pub fn lower_solidity(c: &Contract) -> String {
     let mut out = String::new();
     out.push_str("// SPDX-License-Identifier: MIT\n");
     out.push_str("pragma solidity ^0.8.28;\n\n");
-    out.push_str(&format!("contract {} {{\n", c.name));
 
-    for field in &c.fields {
-        out.push_str(&format!("    {} {};\n", sol_type(&field.ty), field.name));
+    for parent in &c.inherits {
+        out.push_str(&format!("import \"{}\";\n", parent.import_path));
+    }
+    if !c.inherits.is_empty() {
+        out.push('\n');
     }
 
-    for (i, method) in c.methods.iter().enumerate() {
-        // Blank line between the fields block and the first method, and
-        // between consecutive methods.
-        if i > 0 || !c.fields.is_empty() {
+    out.push_str(&format!("contract {}", c.name));
+    if !c.inherits.is_empty() {
+        let parents: Vec<&str> = c.inherits.iter().map(|p| p.name.as_str()).collect();
+        out.push_str(&format!(" is {}", parents.join(", ")));
+    }
+    out.push_str(" {\n");
+
+    for field in &c.fields {
+        out.push_str(&format!(
+            "    {} {};\n",
+            sol_type(&field.ty),
+            to_camel_case(&field.name)
+        ));
+    }
+
+    let mut needs_blank = !c.fields.is_empty();
+
+    if let Some(ctor) = &c.constructor {
+        if needs_blank {
+            out.push('\n');
+        }
+        out.push_str(&lower_constructor(ctor, &c.inherits));
+        needs_blank = true;
+    }
+
+    for method in &c.methods {
+        // Blank line between the fields/constructor block and the first
+        // method, and between consecutive methods.
+        if needs_blank {
             out.push('\n');
         }
         out.push_str(&lower_method(method));
+        needs_blank = true;
     }
 
     out.push_str("}\n");
     out
+}
+
+/// Split on `_`, keep the first segment as-is, capitalize the first letter of
+/// each subsequent segment, and drop the underscores.
+/// `initial_owner` -> `initialOwner`, `count` -> `count`.
+fn to_camel_case(s: &str) -> String {
+    let mut parts = s.split('_');
+    let mut out = String::new();
+    if let Some(first) = parts.next() {
+        out.push_str(first);
+    }
+    for part in parts {
+        let mut chars = part.chars();
+        if let Some(c) = chars.next() {
+            out.extend(c.to_uppercase());
+            out.push_str(chars.as_str());
+        }
+    }
+    out
+}
+
+fn lower_constructor(ctor: &Constructor, inherits: &[Parent]) -> String {
+    let params: Vec<String> = ctor
+        .params
+        .iter()
+        .map(|p| format!("{} {}", sol_type(&p.ty), to_camel_case(&p.name)))
+        .collect();
+    let mut sig = format!("    constructor({})", params.join(", "));
+
+    for parent in inherits {
+        if parent.base_args.is_empty() {
+            continue;
+        }
+        let args: Vec<String> = parent.base_args.iter().map(|a| to_camel_case(a)).collect();
+        sig.push_str(&format!(" {}({})", parent.name, args.join(", ")));
+    }
+
+    if ctor.body.is_empty() {
+        sig.push_str(" {}\n");
+    } else {
+        sig.push_str(" {\n");
+        for stmt in &ctor.body {
+            sig.push_str(&format!("        {}\n", lower_stmt(stmt)));
+        }
+        sig.push_str("    }\n");
+    }
+    sig
 }
 
 fn sol_type(ty: &Type) -> &'static str {
@@ -33,9 +111,21 @@ fn sol_type(ty: &Type) -> &'static str {
 }
 
 fn lower_method(m: &Method) -> String {
-    let mut sig = format!("    function {}() public", m.name);
+    let params: Vec<String> = m
+        .params
+        .iter()
+        .map(|p| format!("{} {}", sol_type(&p.ty), to_camel_case(&p.name)))
+        .collect();
+    let mut sig = format!(
+        "    function {}({}) public",
+        to_camel_case(&m.name),
+        params.join(", ")
+    );
     if !m.mutates && m.ret.is_some() {
         sig.push_str(" view");
+    }
+    for modifier in &m.modifiers {
+        sig.push_str(&format!(" {}", modifier));
     }
     if let Some(ret) = &m.ret {
         sig.push_str(&format!(" returns ({})", sol_type(ret)));
@@ -58,7 +148,7 @@ fn lower_stmt(s: &Stmt) -> String {
                 AssignOp::Add => "+=",
                 AssignOp::Set => "=",
             };
-            format!("{} {} {};", f, op_str, lower_expr(value))
+            format!("{} {} {};", to_camel_case(f), op_str, lower_expr(value))
         }
         Stmt::Return(e) => format!("return {};", lower_expr(e)),
         Stmt::ExprStmt(e) => format!("{};", lower_expr(e)),
@@ -68,7 +158,7 @@ fn lower_stmt(s: &Stmt) -> String {
 fn lower_expr(e: &Expr) -> String {
     match e {
         Expr::Literal(n) => n.to_string(),
-        Expr::StorageLoad(f) => f.clone(),
+        Expr::StorageLoad(f) => to_camel_case(f),
         Expr::Binary { op, lhs, rhs } => match op {
             BinOp::Add => format!("{} + {}", lower_expr(lhs), lower_expr(rhs)),
         },
@@ -124,5 +214,73 @@ mod tests {
         assert!(src.contains("count += 1;"));
         assert!(src.contains("function get() public view returns (uint256) {"));
         assert!(src.contains("return count;"));
+    }
+
+    fn ownable_counter() -> Contract {
+        Contract {
+            name: "Counter".into(),
+            inherits: vec![Parent {
+                name: "Ownable".into(),
+                import_path: "@openzeppelin/contracts/access/Ownable.sol".into(),
+                base_args: vec!["initial_owner".into()],
+            }],
+            fields: vec![Field {
+                name: "count".into(),
+                ty: Type::U256,
+            }],
+            constructor: Some(Constructor {
+                params: vec![Param {
+                    name: "initial_owner".into(),
+                    ty: Type::Address,
+                }],
+                body: vec![],
+            }),
+            methods: vec![
+                Method {
+                    name: "increment".into(),
+                    params: vec![],
+                    mutates: true,
+                    ret: None,
+                    modifiers: vec!["onlyOwner".into()],
+                    body: vec![Stmt::Assign {
+                        target: Place::Storage("count".into()),
+                        op: AssignOp::Add,
+                        value: Expr::Literal(1),
+                    }],
+                },
+                Method {
+                    name: "get".into(),
+                    params: vec![],
+                    mutates: false,
+                    ret: Some(Type::U256),
+                    modifiers: vec![],
+                    body: vec![Stmt::Return(Expr::StorageLoad("count".into()))],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn emits_inheriting_contract() {
+        let src = lower_solidity(&ownable_counter());
+        assert!(src.contains(r#"import "@openzeppelin/contracts/access/Ownable.sol";"#));
+        assert!(src.contains("contract Counter is Ownable {"));
+        assert!(src.contains("constructor(address initialOwner) Ownable(initialOwner) {}"));
+        assert!(src.contains("function increment() public onlyOwner {"));
+        assert!(src.contains("count += 1;"));
+        assert!(src.contains("function get() public view returns (uint256) {"));
+    }
+
+    #[test]
+    fn camel_cases_identifiers() {
+        // A field and param in snake_case become camelCase; parent/modifier names stay verbatim.
+        let mut c = ownable_counter();
+        c.fields[0].name = "total_count".into();
+        c.methods[1].body = vec![Stmt::Return(Expr::StorageLoad("total_count".into()))];
+        let src = lower_solidity(&c);
+        assert!(src.contains("uint256 totalCount;"));
+        assert!(src.contains("return totalCount;")); // body ref camelCased consistently
+        assert!(src.contains("Ownable")); // parent name verbatim
+        assert!(src.contains("onlyOwner")); // modifier verbatim
     }
 }
