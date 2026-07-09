@@ -151,6 +151,14 @@ fn expand_inherent_impl(i: syn::ItemImpl) -> TokenStream {
         None => quote! { None },
     };
 
+    // Typed test client (deploy + typed method calls). Since build_methods
+    // already validated the impl, this should not fail; if it does, surface the
+    // error alongside the rest rather than swallowing it.
+    let client = match build_client(&self_ty, &i) {
+        Ok(c) => c,
+        Err(e) => e.to_compile_error(),
+    };
+
     quote! {
         #stripped
         impl ::rustereum::ir::ContractMethods for #self_ty {
@@ -164,6 +172,7 @@ fn expand_inherent_impl(i: syn::ItemImpl) -> TokenStream {
                 vec![ #(#base_inits),* ]
             }
         }
+        #client
     }
     .into()
 }
@@ -311,6 +320,293 @@ fn map_type(ty: &syn::Type) -> Result<TokenStream2, syn::Error> {
         ty.span(),
         "rustereum: unsupported parameter type; only u256, Address, bool in v1",
     ))
+}
+
+/// Client-side mapping for a supported DSL type: the Rust type the typed client
+/// exposes, its ABI head-word encoder/decoder paths, and the Solidity type name
+/// used to build the function selector signature.
+struct ClientType {
+    rust_ty: TokenStream2,
+    encoder: TokenStream2,
+    decoder: TokenStream2,
+    sol_abi: &'static str,
+}
+
+/// Parallel to `map_type`, but for the typed client: DSL type → (client Rust
+/// type, encoder, decoder, Solidity ABI name). Kept separate so `map_type`
+/// (which produces IR `Type` tokens) is untouched.
+fn map_client_type(ty: &syn::Type) -> Result<ClientType, syn::Error> {
+    if let syn::Type::Path(tp) = ty {
+        if let Some(seg) = tp.path.segments.last() {
+            match seg.ident.to_string().as_str() {
+                "u256" | "U256" => {
+                    return Ok(ClientType {
+                        rust_ty: quote! { ::rustereum::vm::U256 },
+                        encoder: quote! { ::rustereum::vm::encode_u256 },
+                        decoder: quote! { ::rustereum::vm::decode_u256 },
+                        sol_abi: "uint256",
+                    })
+                }
+                "Address" => {
+                    return Ok(ClientType {
+                        rust_ty: quote! { ::rustereum::vm::Address },
+                        encoder: quote! { ::rustereum::vm::encode_address },
+                        decoder: quote! { ::rustereum::vm::decode_address },
+                        sol_abi: "address",
+                    })
+                }
+                "bool" | "Bool" => {
+                    return Ok(ClientType {
+                        rust_ty: quote! { bool },
+                        encoder: quote! { ::rustereum::vm::encode_bool },
+                        decoder: quote! { ::rustereum::vm::decode_bool },
+                        sol_abi: "bool",
+                    })
+                }
+                _ => {}
+            }
+        }
+    }
+    Err(syn::Error::new(
+        ty.span(),
+        "rustereum: unsupported parameter type; only u256, Address, bool in v1",
+    ))
+}
+
+/// Split on `_`, keep the first segment as-is, capitalize the first letter of
+/// each subsequent segment, and drop the underscores. Replicates
+/// `solidity::to_camel_case` so the client builds ABI signatures that match the
+/// generated Solidity function names (e.g. `add_ten` → `addTen`).
+fn to_camel_case(s: &str) -> String {
+    let mut parts = s.split('_');
+    let mut out = String::new();
+    if let Some(first) = parts.next() {
+        out.push_str(first);
+    }
+    for part in parts {
+        let mut chars = part.chars();
+        if let Some(c) = chars.next() {
+            out.extend(c.to_uppercase());
+            out.push_str(chars.as_str());
+        }
+    }
+    out
+}
+
+/// Collect non-receiver args of a fn as `(ident, ClientType)` pairs for the
+/// typed client (param declarations + ABI encoding).
+fn client_params<'a>(
+    args: impl Iterator<Item = &'a syn::FnArg>,
+) -> Result<Vec<(syn::Ident, ClientType)>, syn::Error> {
+    let mut out = Vec::new();
+    for arg in args {
+        match arg {
+            syn::FnArg::Typed(pat_ty) => {
+                let ident = match &*pat_ty.pat {
+                    syn::Pat::Ident(pi) => pi.ident.clone(),
+                    other => {
+                        return Err(syn::Error::new(
+                            other.span(),
+                            "rustereum: parameters must be simple identifiers in v1",
+                        ))
+                    }
+                };
+                let ct = map_client_type(&pat_ty.ty)?;
+                out.push((ident, ct));
+            }
+            syn::FnArg::Receiver(r) => {
+                return Err(syn::Error::new(
+                    r.span(),
+                    "rustereum: unexpected self receiver",
+                ))
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Generate a typed test client for an inherent `#[contract] impl`: a
+/// `<Name>Client` struct, a `deploy` associated fn on `<Name>` (taking the
+/// constructor params), and one client method per non-constructor method. The
+/// client references only `::rustereum::vm` + `::rustereum::driver::Artifact`,
+/// so it compiles without the `testing` feature (no revm).
+fn build_client(self_ty: &syn::Type, i: &syn::ItemImpl) -> Result<TokenStream2, syn::Error> {
+    let name_ident = match self_ty {
+        syn::Type::Path(tp) => tp.path.segments.last().map(|s| s.ident.clone()),
+        _ => None,
+    };
+    let name_ident = name_ident.ok_or_else(|| {
+        syn::Error::new(
+            self_ty.span(),
+            "rustereum: #[contract] impl self type must be a simple path (e.g. `impl Counter`)",
+        )
+    })?;
+    let client_ident = quote::format_ident!("{}Client", name_ident);
+
+    let mut ctor_params: Vec<(syn::Ident, ClientType)> = Vec::new();
+    let mut client_methods: Vec<TokenStream2> = Vec::new();
+
+    for item in &i.items {
+        let m = match item {
+            syn::ImplItem::Fn(m) => m,
+            // build_methods already rejected non-fn items before we get here.
+            _ => continue,
+        };
+
+        if m.attrs.iter().any(|a| a.path().is_ident("constructor")) {
+            ctor_params = client_params(m.sig.inputs.iter())?;
+            continue;
+        }
+
+        let sig = &m.sig;
+        let mut inputs = sig.inputs.iter();
+        let receiver = match inputs.next() {
+            Some(syn::FnArg::Receiver(r)) => r,
+            _ => {
+                return Err(syn::Error::new(
+                    sig.span(),
+                    "rustereum: methods must take a self receiver; associated functions are not supported in v1",
+                ))
+            }
+        };
+        let mutates = receiver.reference.is_some() && receiver.mutability.is_some();
+        let params = client_params(inputs)?;
+        let ret = match &sig.output {
+            syn::ReturnType::Default => None,
+            syn::ReturnType::Type(_, ty) => Some(map_client_type(ty)?),
+        };
+        client_methods.push(build_client_method(
+            &sig.ident,
+            mutates,
+            &params,
+            ret.as_ref(),
+        ));
+    }
+
+    // deploy: extra params are the constructor params, ABI-encoded onto the
+    // creation bytecode in order.
+    let ctor_decls = ctor_params.iter().map(|(id, ct)| {
+        let ty = &ct.rust_ty;
+        quote! { #id: #ty }
+    });
+    let ctor_extends = ctor_params.iter().map(|(id, ct)| {
+        let enc = &ct.encoder;
+        quote! { __code.extend_from_slice(&#enc(#id)); }
+    });
+    let code_let = if ctor_params.is_empty() {
+        quote! { let __code = artifact.bytecode.clone(); }
+    } else {
+        quote! { let mut __code = artifact.bytecode.clone(); }
+    };
+
+    Ok(quote! {
+        pub struct #client_ident {
+            pub address: ::rustereum::vm::Address,
+        }
+
+        impl #name_ident {
+            /// Deploy the compiled contract and return a typed client.
+            pub fn deploy(
+                vm: &mut impl ::rustereum::vm::Vm,
+                artifact: &::rustereum::driver::Artifact,
+                #(#ctor_decls),*
+            ) -> #client_ident {
+                #code_let
+                #(#ctor_extends)*
+                let address = ::rustereum::vm::Vm::deploy_code(
+                    vm, ::rustereum::vm::DEPLOYER, &__code,
+                );
+                #client_ident { address }
+            }
+        }
+
+        impl #client_ident {
+            #(#client_methods)*
+        }
+    })
+}
+
+/// Generate one typed client method. View methods (`!mutates`) take no caller,
+/// decode + return the value (or `()`), and panic on revert; mutating methods
+/// take `caller` and return `Result<Ret, Revert>`.
+fn build_client_method(
+    name: &syn::Ident,
+    mutates: bool,
+    params: &[(syn::Ident, ClientType)],
+    ret: Option<&ClientType>,
+) -> TokenStream2 {
+    let camel = to_camel_case(&name.to_string());
+    let abis: Vec<&str> = params.iter().map(|(_, ct)| ct.sol_abi).collect();
+    let sig_str = format!("{}({})", camel, abis.join(","));
+
+    let param_decls = params.iter().map(|(id, ct)| {
+        let ty = &ct.rust_ty;
+        quote! { #id: #ty }
+    });
+    let extends = params.iter().map(|(id, ct)| {
+        let enc = &ct.encoder;
+        quote! { __data.extend_from_slice(&#enc(#id)); }
+    });
+    let data_let = if params.is_empty() {
+        quote! { let __data = ::rustereum::vm::selector(#sig_str).to_vec(); }
+    } else {
+        quote! { let mut __data = ::rustereum::vm::selector(#sig_str).to_vec(); }
+    };
+
+    let ret_ty = match ret {
+        Some(ct) => ct.rust_ty.clone(),
+        None => quote! { () },
+    };
+
+    if mutates {
+        let map_body = match ret {
+            Some(ct) => {
+                let dec = &ct.decoder;
+                quote! { .map(|__out| #dec(&__out)) }
+            }
+            None => quote! { .map(|_| ()) },
+        };
+        quote! {
+            pub fn #name(
+                &self,
+                vm: &mut impl ::rustereum::vm::Vm,
+                caller: ::rustereum::vm::Address,
+                #(#param_decls),*
+            ) -> ::core::result::Result<#ret_ty, ::rustereum::vm::Revert> {
+                #data_let
+                #(#extends)*
+                ::rustereum::vm::Vm::call_raw(vm, caller, self.address, &__data) #map_body
+            }
+        }
+    } else {
+        let out_handling = match ret {
+            Some(ct) => {
+                let dec = &ct.decoder;
+                quote! {
+                    let __out = ::rustereum::vm::Vm::call_raw(
+                        vm, ::rustereum::vm::DEPLOYER, self.address, &__data,
+                    ).expect("view call reverted");
+                    #dec(&__out)
+                }
+            }
+            None => quote! {
+                let _ = ::rustereum::vm::Vm::call_raw(
+                    vm, ::rustereum::vm::DEPLOYER, self.address, &__data,
+                ).expect("view call reverted");
+            },
+        };
+        quote! {
+            pub fn #name(
+                &self,
+                vm: &mut impl ::rustereum::vm::Vm,
+                #(#param_decls),*
+            ) -> #ret_ty {
+                #data_let
+                #(#extends)*
+                #out_handling
+            }
+        }
+    }
 }
 
 fn lower_method(m: &syn::ImplItemFn, modifiers: &[String]) -> Result<TokenStream2, syn::Error> {
