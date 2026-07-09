@@ -7,7 +7,7 @@ struct C {
 
 #[contract]
 impl C {
-    pub fn set(&mut self, x: u256) {
+    pub fn set(&mut self, x: u128) {
         self.count += 1;
     }
 }

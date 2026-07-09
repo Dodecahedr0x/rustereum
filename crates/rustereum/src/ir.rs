@@ -101,6 +101,12 @@ pub trait ContractMethods {
     fn constructor() -> Option<Constructor> {
         None
     }
+    /// Base-contract constructor argument bindings declared via
+    /// `#[constructor(Parent(args...))]`, merged into `Parent::base_args`
+    /// by `assemble_inheriting`.
+    fn base_inits() -> Vec<(String, Vec<String>)> {
+        vec![]
+    }
 }
 
 pub trait ContractInherits {

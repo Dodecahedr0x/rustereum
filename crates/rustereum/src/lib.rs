@@ -6,10 +6,11 @@ pub mod testing;
 
 pub mod prelude {
     pub use crate::u256;
+    pub use crate::Address;
     pub use rustereum_macros::contract;
 }
 
-use crate::ir::{Contract, ContractMethods, ContractStorage};
+use crate::ir::{Contract, ContractInherits, ContractMethods, ContractStorage};
 
 /// Assemble the full `Contract` IR for a `#[contract]` type from its
 /// generated storage + methods traits.
@@ -22,6 +23,32 @@ pub fn assemble<T: ContractStorage + ContractMethods>() -> Contract {
         methods: <T as ContractMethods>::methods(),
     }
 }
+
+/// Assemble the full `Contract` IR for an inheriting `#[contract]` type,
+/// merging the base-constructor argument bindings (`base_inits`) into the
+/// parents declared via the trait impl.
+pub fn assemble_inheriting<T: ContractStorage + ContractMethods + ContractInherits>() -> Contract {
+    let mut inherits = <T as ContractInherits>::parents();
+    let base = <T as ContractMethods>::base_inits();
+    for p in inherits.iter_mut() {
+        if let Some((_, args)) = base.iter().find(|(n, _)| n == &p.name) {
+            p.base_args = args.clone();
+        }
+    }
+    Contract {
+        name: <T as ContractStorage>::name(),
+        inherits,
+        fields: <T as ContractStorage>::fields(),
+        constructor: <T as ContractMethods>::constructor(),
+        methods: <T as ContractMethods>::methods(),
+    }
+}
+
+/// EVM address type. In a `#[contract]`, contract bodies are a DSL: this type
+/// exists so constructor/method params typed `Address` type-check as native
+/// Rust; the real on-chain semantics come from the generated Yul.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Address(pub alloy_primitives::Address);
 
 /// EVM 256-bit unsigned integer. In a `#[contract]`, contract bodies are a
 /// DSL: this type exists so they type-check as native Rust; the real

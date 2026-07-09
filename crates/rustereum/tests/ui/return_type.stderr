@@ -1,5 +1,13 @@
-error: rustereum: unsupported return type; only u256 is supported in v1
+error: rustereum: unsupported parameter type; only u256, Address, bool in v1
   --> tests/ui/return_type.rs:10:24
    |
-10 |     pub fn f(&self) -> bool {
+10 |     pub fn f(&self) -> u128 {
    |                        ^^^^
+
+error[E0308]: mismatched types
+  --> tests/ui/return_type.rs:11:9
+   |
+10 |     pub fn f(&self) -> u128 {
+   |                        ---- expected `u128` because of return type
+11 |         self.count
+   |         ^^^^^^^^^^ expected `u128`, found `u256`

@@ -80,33 +80,100 @@ fn build_fields(s: &syn::ItemStruct) -> Result<Vec<TokenStream2>, syn::Error> {
 }
 
 fn expand_impl(i: syn::ItemImpl) -> TokenStream {
+    if i.trait_.is_some() {
+        expand_trait_impl(i)
+    } else {
+        expand_inherent_impl(i)
+    }
+}
+
+/// A trait impl (`impl Ownable for Counter {}`) declares a single inherited
+/// parent. The parent's `base_args` are left empty here and merged in later
+/// from the `#[constructor(Parent(args...))]` on the inherent impl.
+///
+/// Limitation (v1): supports exactly ONE parent (a single trait impl).
+/// Multiple parents would require accumulating across `ContractInherits`
+/// impls, which is out of scope for this milestone.
+fn expand_trait_impl(i: syn::ItemImpl) -> TokenStream {
     let self_ty = &i.self_ty;
-    match build_methods(&i) {
-        // The original impl is re-emitted unchanged so its methods are
-        // natively callable and rust-analyzer works; its bodies (e.g.
-        // `self.count += 1`) are a DSL that also compiles as native Rust
-        // against `u256`, while the same bodies are lowered to IR (and
-        // ultimately Yul) in the generated `ContractMethods` impl.
-        Ok(methods) => quote! {
-            #i
-            impl ::rustereum::ir::ContractMethods for #self_ty {
-                fn methods() -> Vec<::rustereum::ir::Method> {
-                    vec![ #(#methods),* ]
-                }
+    // `i.trait_` is `Some((bang, path, for))`; the path is the trait, e.g. `Ownable`.
+    let trait_path = &i.trait_.as_ref().unwrap().1;
+    quote! {
+        #i
+        impl ::rustereum::ir::ContractInherits for #self_ty {
+            fn parents() -> Vec<::rustereum::ir::Parent> {
+                vec![ ::rustereum::ir::Parent {
+                    name: <#self_ty as #trait_path>::SOL_NAME.to_string(),
+                    import_path: <#self_ty as #trait_path>::SOL_IMPORT.to_string(),
+                    base_args: vec![],
+                } ]
             }
         }
-        .into(),
+    }
+    .into()
+}
+
+/// Lowered contents of an inherent `#[contract] impl`.
+struct ImplLowering {
+    methods: Vec<TokenStream2>,
+    constructor: Option<TokenStream2>,
+    base_inits: Vec<TokenStream2>,
+}
+
+fn expand_inherent_impl(i: syn::ItemImpl) -> TokenStream {
+    let self_ty = i.self_ty.clone();
+    let lowering = match build_methods(&i) {
+        Ok(l) => l,
         Err(e) => {
             let err = e.to_compile_error();
             // Re-emit the original impl so downstream "no method named…"
             // errors don't cascade from the method bodies going missing.
-            quote! { #i #err }.into()
+            return quote! { #i #err }.into();
+        }
+    };
+
+    // Re-emit the impl with the helper attributes (`#[modifier]`,
+    // `#[constructor]`) stripped so rustc doesn't reject them as unknown
+    // attributes. The bodies (e.g. `self.count += 1`) still compile as
+    // native Rust against `u256`, while being lowered to IR below.
+    let mut stripped = i.clone();
+    for item in &mut stripped.items {
+        if let syn::ImplItem::Fn(m) = item {
+            m.attrs
+                .retain(|a| !a.path().is_ident("modifier") && !a.path().is_ident("constructor"));
         }
     }
+
+    let methods = &lowering.methods;
+    let base_inits = &lowering.base_inits;
+    let constructor = match &lowering.constructor {
+        Some(c) => quote! { Some(#c) },
+        None => quote! { None },
+    };
+
+    quote! {
+        #stripped
+        impl ::rustereum::ir::ContractMethods for #self_ty {
+            fn methods() -> Vec<::rustereum::ir::Method> {
+                vec![ #(#methods),* ]
+            }
+            fn constructor() -> Option<::rustereum::ir::Constructor> {
+                #constructor
+            }
+            fn base_inits() -> Vec<(String, Vec<String>)> {
+                vec![ #(#base_inits),* ]
+            }
+        }
+    }
+    .into()
 }
 
-fn build_methods(i: &syn::ItemImpl) -> Result<Vec<TokenStream2>, syn::Error> {
-    let mut out = Vec::new();
+fn build_methods(i: &syn::ItemImpl) -> Result<ImplLowering, syn::Error> {
+    let mut lowering = ImplLowering {
+        methods: Vec::new(),
+        constructor: None,
+        base_inits: Vec::new(),
+    };
     for item in &i.items {
         let m = match item {
             syn::ImplItem::Fn(m) => m,
@@ -117,12 +184,136 @@ fn build_methods(i: &syn::ItemImpl) -> Result<Vec<TokenStream2>, syn::Error> {
                 ))
             }
         };
-        out.push(lower_method(m)?);
+
+        // Collect helper attributes.
+        let mut modifiers = Vec::new();
+        let mut ctor_attr = None;
+        for attr in &m.attrs {
+            if attr.path().is_ident("modifier") {
+                let ident: syn::Ident = attr.parse_args()?;
+                modifiers.push(ident.to_string());
+            } else if attr.path().is_ident("constructor") {
+                ctor_attr = Some(parse_constructor_attr(attr)?);
+            }
+        }
+
+        if let Some((parent, args)) = ctor_attr {
+            // This method is the constructor: excluded from methods().
+            let params = lower_params(m.sig.inputs.iter())?;
+            let mut body = Vec::new();
+            for stmt in &m.block.stmts {
+                body.push(lower_stmt(stmt)?);
+            }
+            lowering.constructor = Some(quote! {
+                ::rustereum::ir::Constructor {
+                    params: vec![ #(#params),* ],
+                    body: vec![ #(#body),* ],
+                }
+            });
+            let arg_lits = args.iter().map(|a| quote! { #a.to_string() });
+            lowering
+                .base_inits
+                .push(quote! { (#parent.to_string(), vec![ #(#arg_lits),* ]) });
+        } else {
+            lowering.methods.push(lower_method(m, &modifiers)?);
+        }
+    }
+    Ok(lowering)
+}
+
+/// Parse `#[constructor(Parent(arg1, arg2, ...))]` into the parent name and
+/// the list of argument identifiers.
+fn parse_constructor_attr(attr: &syn::Attribute) -> Result<(String, Vec<String>), syn::Error> {
+    let call: syn::ExprCall = attr.parse_args()?;
+    let parent = match &*call.func {
+        syn::Expr::Path(p) => p
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string())
+            .ok_or_else(|| {
+                syn::Error::new(
+                    p.span(),
+                    "rustereum: #[constructor(..)] needs a parent name",
+                )
+            })?,
+        other => {
+            return Err(syn::Error::new(
+                other.span(),
+                "rustereum: #[constructor(..)] must be of the form Parent(args...)",
+            ))
+        }
+    };
+    let mut args = Vec::new();
+    for a in &call.args {
+        match a {
+            syn::Expr::Path(p) => {
+                let id = p.path.segments.last().unwrap().ident.to_string();
+                args.push(id);
+            }
+            other => {
+                return Err(syn::Error::new(
+                    other.span(),
+                    "rustereum: #[constructor(..)] arguments must be plain identifiers",
+                ))
+            }
+        }
+    }
+    Ok((parent, args))
+}
+
+/// Lower a sequence of non-receiver function args to `ir::Param` literals.
+fn lower_params<'a>(
+    args: impl Iterator<Item = &'a syn::FnArg>,
+) -> Result<Vec<TokenStream2>, syn::Error> {
+    let mut out = Vec::new();
+    for arg in args {
+        match arg {
+            syn::FnArg::Typed(pat_ty) => {
+                let name = match &*pat_ty.pat {
+                    syn::Pat::Ident(pi) => pi.ident.to_string(),
+                    other => {
+                        return Err(syn::Error::new(
+                            other.span(),
+                            "rustereum: parameters must be simple identifiers in v1",
+                        ))
+                    }
+                };
+                let ty = map_type(&pat_ty.ty)?;
+                out.push(quote! {
+                    ::rustereum::ir::Param { name: #name.to_string(), ty: #ty }
+                });
+            }
+            syn::FnArg::Receiver(r) => {
+                return Err(syn::Error::new(
+                    r.span(),
+                    "rustereum: unexpected self receiver",
+                ))
+            }
+        }
     }
     Ok(out)
 }
 
-fn lower_method(m: &syn::ImplItemFn) -> Result<TokenStream2, syn::Error> {
+/// Map a Rust type to an `ir::Type` token by its last path segment.
+fn map_type(ty: &syn::Type) -> Result<TokenStream2, syn::Error> {
+    if let syn::Type::Path(tp) = ty {
+        if let Some(seg) = tp.path.segments.last() {
+            match seg.ident.to_string().as_str() {
+                "u256" | "U256" => return Ok(quote! { ::rustereum::ir::Type::U256 }),
+                "Address" => return Ok(quote! { ::rustereum::ir::Type::Address }),
+                "bool" | "Bool" => return Ok(quote! { ::rustereum::ir::Type::Bool }),
+                _ => {}
+            }
+        }
+    }
+    Err(syn::Error::new(
+        ty.span(),
+        "rustereum: unsupported parameter type; only u256, Address, bool in v1",
+    ))
+}
+
+fn lower_method(m: &syn::ImplItemFn, modifiers: &[String]) -> Result<TokenStream2, syn::Error> {
     let sig = &m.sig;
     let name = sig.ident.to_string();
 
@@ -139,26 +330,15 @@ fn lower_method(m: &syn::ImplItemFn) -> Result<TokenStream2, syn::Error> {
     };
     let mutates = receiver.reference.is_some() && receiver.mutability.is_some();
 
-    // No extra params allowed in v1.
-    if let Some(param) = inputs.next() {
-        return Err(syn::Error::new(
-            param.span(),
-            "rustereum: function parameters are not supported in v1",
-        ));
-    }
+    // Remaining args → typed params.
+    let params = lower_params(inputs)?;
 
     // Return type.
     let ret = match &sig.output {
         syn::ReturnType::Default => quote! { None },
         syn::ReturnType::Type(_, ty) => {
-            if is_u256(ty) {
-                quote! { Some(::rustereum::ir::Type::U256) }
-            } else {
-                return Err(syn::Error::new(
-                    ty.span(),
-                    "rustereum: unsupported return type; only u256 is supported in v1",
-                ));
-            }
+            let mapped = map_type(ty)?;
+            quote! { Some(#mapped) }
         }
     };
 
@@ -168,13 +348,15 @@ fn lower_method(m: &syn::ImplItemFn) -> Result<TokenStream2, syn::Error> {
         body.push(lower_stmt(stmt)?);
     }
 
+    let modifier_lits = modifiers.iter().map(|s| quote! { #s.to_string() });
+
     Ok(quote! {
         ::rustereum::ir::Method {
             name: #name.to_string(),
             mutates: #mutates,
-            params: vec![],
+            params: vec![ #(#params),* ],
             ret: #ret,
-            modifiers: vec![],
+            modifiers: vec![ #(#modifier_lits),* ],
             body: vec![ #(#body),* ],
         }
     })

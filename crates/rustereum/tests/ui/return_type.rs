@@ -7,8 +7,8 @@ struct C {
 
 #[contract]
 impl C {
-    pub fn f(&self) -> bool {
-        true
+    pub fn f(&self) -> u128 {
+        self.count
     }
 }
 
