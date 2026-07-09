@@ -1208,13 +1208,16 @@ dependencies = [
  "home",
  "itertools 0.13.0",
  "md-5",
+ "once_cell",
  "path-slash",
  "rayon",
  "semver 1.0.28",
  "serde",
  "serde_json",
+ "sha2",
  "solang-parser",
  "svm-rs",
+ "svm-rs-builds",
  "thiserror 1.0.69",
  "tracing",
  "winnow 0.6.26",
@@ -1283,7 +1286,9 @@ dependencies = [
  "semver 1.0.28",
  "serde",
  "serde_json",
+ "svm-rs",
  "thiserror 1.0.69",
+ "tokio",
  "walkdir",
 ]
 
@@ -1306,6 +1311,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07bbe89c50d7a535e539b8c17bc0b49bdb77747034daa8087407d655f3f7cc1d"
 dependencies = [
  "futures-core",
+ "futures-sink",
 ]
 
 [[package]]
@@ -1313,6 +1319,18 @@ name = "futures-core"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e3450815272ef58cec6d564423f6e755e25379b217b0bc688e295ba24df6b1d"
+
+[[package]]
+name = "futures-io"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cecba35d7ad927e23624b22ad55235f2239cfa44fd10428eecbeba6d6a717718"
+
+[[package]]
+name = "futures-sink"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c39754e157331b013978ec91992bde1ac089843443c49cbc7f46150b0fad0893"
 
 [[package]]
 name = "futures-task"
@@ -1327,7 +1345,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "389ca41296e6190b48053de0321d02a77f32f8a5d2461dd38762c0593805c6d6"
 dependencies = [
  "futures-core",
+ "futures-io",
+ "futures-sink",
  "futures-task",
+ "memchr",
  "pin-project-lite",
  "slab",
 ]
@@ -2641,7 +2662,9 @@ checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
 dependencies = [
  "base64",
  "bytes",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",
@@ -2853,6 +2876,8 @@ dependencies = [
  "foundry-compilers",
  "revm",
  "rustereum-macros",
+ "semver 1.0.28",
+ "serde_json",
  "tiny-keccak",
 ]
 
@@ -3364,6 +3389,18 @@ dependencies = [
  "thiserror 2.0.18",
  "url",
  "zip",
+]
+
+[[package]]
+name = "svm-rs-builds"
+version = "0.5.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74224f62f19c1309caa071de7c1c9c1ad1d7551d2f881af4046f3d71880c820a"
+dependencies = [
+ "const-hex",
+ "semver 1.0.28",
+ "serde_json",
+ "svm-rs",
 ]
 
 [[package]]
