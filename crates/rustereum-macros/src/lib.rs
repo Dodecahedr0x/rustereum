@@ -82,11 +82,13 @@ fn build_fields(s: &syn::ItemStruct) -> Result<Vec<TokenStream2>, syn::Error> {
 fn expand_impl(i: syn::ItemImpl) -> TokenStream {
     let self_ty = &i.self_ty;
     match build_methods(&i) {
-        // The impl block is a DSL description lowered to IR (and ultimately
-        // Yul); its bodies (e.g. `self.count += 1`) are not valid native
-        // Rust arithmetic against `u256`, so it is consumed rather than
-        // re-emitted. The `Self` type still exists via the re-emitted struct.
+        // The original impl is re-emitted unchanged so its methods are
+        // natively callable and rust-analyzer works; its bodies (e.g.
+        // `self.count += 1`) are a DSL that also compiles as native Rust
+        // against `u256`, while the same bodies are lowered to IR (and
+        // ultimately Yul) in the generated `ContractMethods` impl.
         Ok(methods) => quote! {
+            #i
             impl ::rustereum::ir::ContractMethods for #self_ty {
                 fn methods() -> Vec<::rustereum::ir::Method> {
                     vec![ #(#methods),* ]

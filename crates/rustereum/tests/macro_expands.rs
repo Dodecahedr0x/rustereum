@@ -1,6 +1,4 @@
-use rustereum::ir::{
-    AssignOp, ContractMethods, ContractStorage, Expr, Field, Method, Place, Stmt, Type,
-};
+use rustereum::ir::{AssignOp, ContractMethods, ContractStorage, Expr, Method, Place, Stmt, Type};
 use rustereum::prelude::*;
 
 #[contract]
@@ -59,4 +57,15 @@ fn macro_ir_matches_handwritten() {
         },
     ];
     assert_eq!(<Counter as ContractMethods>::methods(), expected);
+}
+
+#[test]
+fn contract_impl_is_natively_callable() {
+    // The re-emitted impl means the DSL bodies (`self.count += 1`,
+    // `self.count`) also compile and run as native Rust.
+    let mut c = Counter {
+        count: u256::from(0u64),
+    };
+    c.increment();
+    assert_eq!(c.get(), u256::from(1u64));
 }
