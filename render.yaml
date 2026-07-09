@@ -9,10 +9,17 @@ services:
     name: rustereum-docs
     buildCommand: |
       set -euo pipefail
-      # Render's static-site build image has no Rust toolchain; install one.
-      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --default-toolchain stable --profile minimal
-      . "$HOME/.cargo/env"
+      # Use Render's preinstalled Rust when available. If a future image lacks
+      # Cargo, install rustup into the writable home directory.
+      export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+      export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+      export PATH="$CARGO_HOME/bin:$PATH"
+      if ! command -v cargo >/dev/null 2>&1; then
+        export RUSTUP_INIT_SKIP_PATH_CHECK=yes
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+          | sh -s -- -y --default-toolchain stable --profile minimal
+        . "$CARGO_HOME/env"
+      fi
       # Document the workspace crates (not their dependencies). The `testing`
       # feature is enabled so the revm-backed `testing` module is included.
       cargo doc --no-deps --workspace --features rustereum/testing
