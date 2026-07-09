@@ -1,6 +1,6 @@
-pub mod ir;      // implemented in a later task
-pub mod lower;   // implemented in a later task
-pub mod driver;  // implemented in a later task
+pub mod driver; // implemented in a later task
+pub mod ir; // implemented in a later task
+pub mod lower; // implemented in a later task
 pub mod testing; // implemented in a later task
 
 pub mod prelude {

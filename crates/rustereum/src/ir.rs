@@ -97,7 +97,10 @@ mod tests {
     fn counter_contract() -> Contract {
         Contract {
             name: "Counter".into(),
-            fields: vec![Field { name: "count".into(), ty: Type::U256 }],
+            fields: vec![Field {
+                name: "count".into(),
+                ty: Type::U256,
+            }],
             methods: vec![
                 Method {
                     name: "increment".into(),
