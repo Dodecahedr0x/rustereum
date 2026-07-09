@@ -6,9 +6,20 @@
 use alloy_primitives::{Address, U256};
 use revm::primitives::{AccountInfo, Bytes, ExecutionResult, Output, TxKind, U256 as RevmU256};
 use revm::{Evm, InMemoryDB};
+use tiny_keccak::{Hasher, Keccak};
 
 /// A fixed, funded externally-owned account used as the sender for every tx.
 const CALLER: Address = Address::new([0x11; 20]);
+
+/// 4-byte function selector: the first 4 bytes of keccak256 over the canonical
+/// signature (e.g. `"get()"`, which is already canonical for zero-arg fns).
+fn selector(sig: &str) -> [u8; 4] {
+    let mut hasher = Keccak::v256();
+    hasher.update(sig.as_bytes());
+    let mut out = [0u8; 32];
+    hasher.finalize(&mut out);
+    [out[0], out[1], out[2], out[3]]
+}
 
 /// A tiny EVM sandbox backed by an in-memory database.
 pub struct TestEvm {
@@ -71,9 +82,7 @@ impl TestEvm {
 
     /// Build calldata from a zero-arg signature: just the 4 selector bytes.
     fn calldata(sig: &str) -> Bytes {
-        let name = sig.split('(').next().unwrap_or(sig);
-        let selector = crate::lower::selector(name, &[]);
-        Bytes::copy_from_slice(&selector.to_be_bytes())
+        Bytes::copy_from_slice(&selector(sig))
     }
 
     /// Execute one transaction against the persistent DB, committing state.

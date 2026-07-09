@@ -3,13 +3,15 @@ use foundry_compilers::solc::Solc;
 use semver::Version;
 use std::path::PathBuf;
 
-/// solc version fetched/pinned by foundry-compilers (via svm) for Yul compilation.
+/// solc version fetched/pinned by foundry-compilers (via svm) for compilation.
 const SOLC_VERSION: &str = "0.8.28";
 
-/// A compiled contract: the Yul that was written to disk, plus the resulting
-/// creation (deployment) bytecode and ABI.
+/// A compiled contract: the Solidity source and solc-generated Yul (IR) that
+/// were written to disk, plus the resulting creation (deployment) bytecode and
+/// ABI.
 pub struct Artifact {
     pub name: String,
+    pub sol_path: PathBuf,
     pub yul_path: PathBuf,
     pub bytecode: Vec<u8>,
     pub abi: serde_json::Value,
@@ -49,23 +51,25 @@ fn target_dir() -> PathBuf {
     dir
 }
 
-/// Lower `c` to Yul, write it to disk, then compile it to EVM bytecode via
-/// foundry-compilers (solc, standard-JSON `language: "Yul"`).
+/// Lower `c` to Solidity, write it to disk, then compile it to EVM bytecode via
+/// foundry-compilers (solc, standard-JSON `language: "Solidity"`). The
+/// solc-generated Yul (IR) is dumped alongside for inspection.
 pub fn compile_contract(c: &Contract) -> Result<Artifact, CompileError> {
-    let yul = crate::lower::lower(c);
+    let sol = crate::solidity::lower_solidity(c);
 
-    // Write the Yul FIRST so a later solc failure still leaves it for inspection.
+    // Write the Solidity FIRST so a later solc failure still leaves it for
+    // inspection.
     let dir = target_dir();
-    let yul_path = dir.join(format!("{}.yul", c.name));
-    std::fs::write(&yul_path, &yul)?;
+    let sol_path = dir.join(format!("{}.sol", c.name));
+    std::fs::write(&sol_path, &sol)?;
 
-    let source_name = format!("{}.yul", c.name);
+    let source_name = format!("{}.sol", c.name);
     let input = serde_json::json!({
-        "language": "Yul",
-        "sources": { source_name.clone(): { "content": yul } },
+        "language": "Solidity",
+        "sources": { source_name.clone(): { "content": sol } },
         "settings": {
-            "outputSelection": { "*": { "*": ["evm.bytecode.object", "abi"], "": ["*"] } },
-            "optimizer": { "enabled": true, "details": { "yul": true } }
+            "outputSelection": { "*": { "*": ["evm.bytecode.object", "abi", "ir"] } },
+            "optimizer": { "enabled": true }
         }
     });
 
@@ -75,7 +79,7 @@ pub fn compile_contract(c: &Contract) -> Result<Artifact, CompileError> {
 
     let output: serde_json::Value = solc.compile_as(&input).map_err(|e| {
         CompileError::Solc(format!(
-            "solc compilation failed: {e}; inspect target/rustereum/{}.yul",
+            "solc compilation failed: {e}; inspect target/rustereum/{}.sol",
             c.name
         ))
     })?;
@@ -94,23 +98,23 @@ pub fn compile_contract(c: &Contract) -> Result<Artifact, CompileError> {
             .collect();
         if !fatal.is_empty() {
             return Err(CompileError::Solc(format!(
-                "{}; inspect target/rustereum/{}.yul",
+                "{}; inspect target/rustereum/{}.sol",
                 fatal.join("\n"),
                 c.name
             )));
         }
     }
 
-    // Navigate: contracts -> <file> -> <contract> -> evm.bytecode.object.
-    // Index explicitly by the source file name and object name rather than
-    // grabbing the first entry, so this is robust regardless of ordering.
+    // Navigate: contracts -> <file> -> <contract>. Index explicitly by the
+    // source file name and object name rather than grabbing the first entry,
+    // so this is robust regardless of ordering.
     let contract = output
         .get("contracts")
         .and_then(|files| files.get(&source_name))
         .and_then(|file| file.get(&c.name))
         .ok_or_else(|| {
             CompileError::Solc(format!(
-                "solc output missing contract {} in {}; inspect target/rustereum/{}.yul",
+                "solc output missing contract {} in {}; inspect target/rustereum/{}.sol",
                 c.name, source_name, c.name
             ))
         })?;
@@ -122,7 +126,7 @@ pub fn compile_contract(c: &Contract) -> Result<Artifact, CompileError> {
         .and_then(|o| o.as_str())
         .ok_or_else(|| {
             CompileError::Solc(format!(
-                "no bytecode object in solc output; inspect target/rustereum/{}.yul",
+                "no bytecode object in solc output; inspect target/rustereum/{}.sol",
                 c.name
             ))
         })?;
@@ -130,7 +134,7 @@ pub fn compile_contract(c: &Contract) -> Result<Artifact, CompileError> {
     let hex_str = object.strip_prefix("0x").unwrap_or(object);
     let bytecode = decode_hex(hex_str).ok_or_else(|| {
         CompileError::Solc(format!(
-            "invalid hex bytecode from solc; inspect target/rustereum/{}.yul",
+            "invalid hex bytecode from solc; inspect target/rustereum/{}.sol",
             c.name
         ))
     })?;
@@ -139,6 +143,11 @@ pub fn compile_contract(c: &Contract) -> Result<Artifact, CompileError> {
         .get("abi")
         .cloned()
         .unwrap_or_else(|| serde_json::json!([]));
+
+    // Dump the solc-generated Yul (IR) alongside the Solidity source.
+    let ir = contract.get("ir").and_then(|s| s.as_str()).unwrap_or("");
+    let yul_path = dir.join(format!("{}.yul", c.name));
+    std::fs::write(&yul_path, ir)?;
 
     let json_path = dir.join(format!("{}.json", c.name));
     let artifact_json = serde_json::json!({
@@ -152,6 +161,7 @@ pub fn compile_contract(c: &Contract) -> Result<Artifact, CompileError> {
 
     Ok(Artifact {
         name: c.name.clone(),
+        sol_path,
         yul_path,
         bytecode,
         abi,
@@ -204,12 +214,22 @@ mod tests {
     }
 
     #[test]
-    fn compile_writes_yul_and_returns_bytecode() {
+    fn compile_writes_solidity_yul_and_returns_bytecode() {
         let artifact = compile_contract(&counter()).expect("compile");
-        assert!(artifact.yul_path.exists(), "yul file must be written");
-        assert!(std::fs::read_to_string(&artifact.yul_path)
+        assert!(
+            artifact.sol_path.exists(),
+            "solidity artifact must be written"
+        );
+        assert!(std::fs::read_to_string(&artifact.sol_path)
             .unwrap()
-            .contains("object \"Counter\""));
+            .contains("contract Counter"));
+        assert!(
+            artifact.yul_path.exists(),
+            "solc-generated Yul must be dumped"
+        );
         assert!(!artifact.bytecode.is_empty());
+        // Real ABI now (increment/get present), not the empty [] from the Yul backend.
+        let abi = artifact.abi.to_string();
+        assert!(abi.contains("increment") && abi.contains("get"));
     }
 }
