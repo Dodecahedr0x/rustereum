@@ -10,6 +10,11 @@ members = [
     "examples/openzeppelin/pausable",
     "examples/openzeppelin/reentrancy-guard",
     "examples/openzeppelin/access-control",
+    "examples/openzeppelin/erc20",
+    "examples/openzeppelin/erc721",
+    "examples/openzeppelin/erc1155",
+    "examples/openzeppelin/erc165",
+    "examples/openzeppelin/erc1967-proxy",
 ]
 
 [workspace.dependencies]

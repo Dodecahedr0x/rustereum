@@ -1,0 +1,10 @@
+[package]
+name = "erc20"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rustereum = { path = "../../../crates/rustereum" }
+
+[dev-dependencies]
+rustereum = { path = "../../../crates/rustereum", features = ["testing"] }
