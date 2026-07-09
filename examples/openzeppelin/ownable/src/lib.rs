@@ -19,7 +19,6 @@ impl Counter {
     // The body is empty: `#[constructor(Ownable(initial_owner))]` forwards the
     // argument straight to the inherited `Ownable` constructor.
     #[constructor(Ownable(initial_owner))]
-    #[allow(unused_variables)]
     pub fn new(initial_owner: Address) {}
 
     #[modifier(only_owner)]

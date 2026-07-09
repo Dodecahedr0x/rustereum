@@ -20,7 +20,6 @@ impl Ownable for Counter {}
 #[contract]
 impl Counter {
     #[constructor(Ownable(initial_owner))]
-    #[allow(unused_variables)]
     pub fn new(initial_owner: Address) {}
 
     #[modifier(only_owner)]

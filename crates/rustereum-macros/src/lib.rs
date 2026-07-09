@@ -38,6 +38,9 @@ fn expand_struct(s: syn::ItemStruct) -> TokenStream {
     };
 
     quote! {
+        // The re-emitted contract struct is DSL scaffolding: its fields exist to
+        // declare storage, not to be read natively, so suppress dead-code warnings.
+        #[allow(dead_code)]
         #s
 
         impl ::rustereum::ir::ContractStorage for #name {
@@ -160,6 +163,10 @@ fn expand_inherent_impl(i: syn::ItemImpl) -> TokenStream {
     };
 
     quote! {
+        // The re-emitted contract impl is DSL scaffolding: its native methods
+        // and constructor params exist only to type-check (tests drive the
+        // generated client, not these), so suppress unused/dead-code warnings.
+        #[allow(dead_code, unused_variables)]
         #stripped
         impl ::rustereum::ir::ContractMethods for #self_ty {
             fn methods() -> Vec<::rustereum::ir::Method> {
@@ -500,10 +507,14 @@ fn build_client(self_ty: &syn::Type, i: &syn::ItemImpl) -> Result<TokenStream2, 
     };
 
     Ok(quote! {
+        // Generated test client: not every deploy/method is exercised by every
+        // test, so suppress dead-code warnings on this scaffolding.
+        #[allow(dead_code)]
         pub struct #client_ident {
             pub address: ::rustereum::vm::Address,
         }
 
+        #[allow(dead_code)]
         impl #name_ident {
             /// Assemble and compile this contract to an EVM artifact. The
             /// project root (where `lib/` and `remappings.txt` live) defaults to
@@ -548,6 +559,7 @@ fn build_client(self_ty: &syn::Type, i: &syn::ItemImpl) -> Result<TokenStream2, 
             }
         }
 
+        #[allow(dead_code)]
         impl #client_ident {
             #(#client_methods)*
         }
