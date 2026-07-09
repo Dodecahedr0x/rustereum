@@ -7,4 +7,5 @@ edition = "2021"
 rustereum = { path = "../crates/rustereum" }
 
 [dev-dependencies]
-revm = { workspace = true }
+rustereum = { path = "../crates/rustereum", features = ["testing"] }
+alloy-primitives = { workspace = true }

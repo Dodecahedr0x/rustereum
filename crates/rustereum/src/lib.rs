@@ -9,6 +9,18 @@ pub mod prelude {
     pub use rustereum_macros::contract;
 }
 
+use crate::ir::{Contract, ContractMethods, ContractStorage};
+
+/// Assemble the full `Contract` IR for a `#[contract]` type from its
+/// generated storage + methods traits.
+pub fn assemble<T: ContractStorage + ContractMethods>() -> Contract {
+    Contract {
+        name: <T as ContractStorage>::name(),
+        fields: <T as ContractStorage>::fields(),
+        methods: <T as ContractMethods>::methods(),
+    }
+}
+
 /// EVM 256-bit unsigned integer. In a `#[contract]`, contract bodies are a
 /// DSL: this type exists so they type-check as native Rust; the real
 /// semantics come from the generated Yul, not these operator impls.
