@@ -317,7 +317,7 @@ mod tests {
             inherits: vec![Parent {
                 name: "Ownable".into(),
                 import_path: "@openzeppelin/contracts/access/Ownable.sol".into(),
-                base_args: vec!["initial_owner".into()],
+                base_args: vec!["initialOwner".into()],
             }],
             fields: vec![Field {
                 name: "count".into(),

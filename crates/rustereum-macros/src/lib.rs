@@ -260,17 +260,24 @@ fn parse_constructor_attr(attr: &syn::Attribute) -> Result<(String, Vec<String>)
             ))
         }
     };
+    // Base-initializer args are pre-rendered to their final Solidity form here:
+    // an identifier references a constructor param (camelCased to match the
+    // param declaration); a literal (string/int/bool) is emitted verbatim
+    // (e.g. `ERC20("MyToken", "MTK")`). Codegen then emits them as-is.
     let mut args = Vec::new();
     for a in &call.args {
         match a {
             syn::Expr::Path(p) => {
                 let id = p.path.segments.last().unwrap().ident.to_string();
-                args.push(id);
+                args.push(to_camel_case(&id));
+            }
+            syn::Expr::Lit(lit) => {
+                args.push(quote!(#lit).to_string());
             }
             other => {
                 return Err(syn::Error::new(
                     other.span(),
-                    "rustereum: #[constructor(..)] arguments must be plain identifiers",
+                    "rustereum: #[constructor(..)] arguments must be identifiers or literals",
                 ))
             }
         }

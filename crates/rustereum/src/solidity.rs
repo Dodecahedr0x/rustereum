@@ -86,8 +86,13 @@ fn lower_constructor(ctor: &Constructor, inherits: &[Parent]) -> String {
         if parent.base_args.is_empty() {
             continue;
         }
-        let args: Vec<String> = parent.base_args.iter().map(|a| to_camel_case(a)).collect();
-        sig.push_str(&format!(" {}({})", parent.name, args.join(", ")));
+        // `base_args` are already rendered to their final Solidity form by the
+        // macro (identifiers camelCased, literals verbatim), so emit as-is.
+        sig.push_str(&format!(
+            " {}({})",
+            parent.name,
+            parent.base_args.join(", ")
+        ));
     }
 
     if ctor.body.is_empty() {
@@ -224,7 +229,7 @@ mod tests {
             inherits: vec![Parent {
                 name: "Ownable".into(),
                 import_path: "@openzeppelin/contracts/access/Ownable.sol".into(),
-                base_args: vec!["initial_owner".into()],
+                base_args: vec!["initialOwner".into()],
             }],
             fields: vec![Field {
                 name: "count".into(),
@@ -285,5 +290,31 @@ mod tests {
         assert!(src.contains("return totalCount;")); // body ref camelCased consistently
         assert!(src.contains("Ownable")); // parent name verbatim
         assert!(src.contains("onlyOwner")); // snake_case only_owner → camelCase onlyOwner
+    }
+
+    #[test]
+    fn emits_literal_base_args() {
+        // Base-initializer args that are literals (e.g. an ERC20 name/symbol)
+        // are emitted verbatim into the Solidity base initializer.
+        let c = Contract {
+            name: "MyToken".into(),
+            inherits: vec![Parent {
+                name: "ERC20".into(),
+                import_path: "@openzeppelin/contracts/token/ERC20/ERC20.sol".into(),
+                base_args: vec![r#""MyToken""#.into(), r#""MTK""#.into()],
+            }],
+            fields: vec![],
+            constructor: Some(Constructor {
+                params: vec![],
+                body: vec![],
+            }),
+            methods: vec![],
+        };
+        let src = lower_solidity(&c);
+        assert!(src.contains("contract MyToken is ERC20 {"));
+        assert!(
+            src.contains(r#"constructor() ERC20("MyToken", "MTK") {}"#),
+            "got: {src}"
+        );
     }
 }

@@ -60,7 +60,7 @@ fn constructor_and_modifier_captured() {
 fn assemble_merges_base_args() {
     let c = assemble_inheriting::<Counter>();
     assert_eq!(c.inherits.len(), 1);
-    assert_eq!(c.inherits[0].base_args, vec!["initial_owner".to_string()]);
+    assert_eq!(c.inherits[0].base_args, vec!["initialOwner".to_string()]);
     assert_eq!(c.constructor.unwrap().params[0].ty, Type::Address);
 }
 
