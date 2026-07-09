@@ -244,7 +244,6 @@ mod tests {
     #[test]
     fn ownable_counter_access_control() {
         use crate::driver::{compile_contract_with, CompileOptions};
-        use crate::ir::*;
         use alloy_primitives::{Address, U256};
 
         let c = ownable_counter_ir();
@@ -254,7 +253,9 @@ mod tests {
         };
         let artifact = compile_contract_with(&c, &opts).unwrap();
 
-        let owner = Address::from([0x11u8; 20]);
+        // Distinct from the fixed deployer/CALLER ([0x11; 20]), so the test
+        // proves the constructor arg — not msg.sender — becomes the owner.
+        let owner = Address::from([0x33u8; 20]);
         let stranger = Address::from([0x22u8; 20]);
 
         let mut evm = TestEvm::new();

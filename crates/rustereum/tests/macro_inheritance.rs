@@ -63,3 +63,30 @@ fn assemble_merges_base_args() {
     assert_eq!(c.inherits[0].base_args, vec!["initial_owner".to_string()]);
     assert_eq!(c.constructor.unwrap().params[0].ty, Type::Address);
 }
+
+// A contract that inherits `Ownable` but whose `#[constructor(Wrong(..))]`
+// base-initializes a parent it does NOT inherit. `assemble_inheriting` must
+// reject this rather than silently drop the base-init.
+#[contract]
+struct Mismatch {
+    count: u256,
+}
+
+#[contract]
+impl Ownable for Mismatch {}
+
+#[contract]
+impl Mismatch {
+    #[constructor(Wrong(initial_owner))]
+    pub fn new(initial_owner: Address) {}
+
+    pub fn get(&self) -> u256 {
+        self.count
+    }
+}
+
+#[test]
+#[should_panic(expected = "not inherited")]
+fn base_init_naming_uninherited_parent_panics() {
+    let _ = assemble_inheriting::<Mismatch>();
+}

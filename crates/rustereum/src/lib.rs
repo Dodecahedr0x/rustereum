@@ -1,5 +1,5 @@
-pub mod driver; // implemented in a later task
-pub mod ir; // implemented in a later task
+pub mod driver;
+pub mod ir;
 pub mod solidity;
 #[cfg(feature = "testing")]
 pub mod testing;
@@ -34,6 +34,12 @@ pub fn assemble_inheriting<T: ContractStorage + ContractMethods + ContractInheri
         if let Some((_, args)) = base.iter().find(|(n, _)| n == &p.name) {
             p.base_args = args.clone();
         }
+    }
+    for (name, _) in &base {
+        assert!(
+            inherits.iter().any(|p| &p.name == name),
+            "rustereum: #[constructor({name}(..))] names `{name}`, which is not inherited via `impl {name} for ...`"
+        );
     }
     Contract {
         name: <T as ContractStorage>::name(),
