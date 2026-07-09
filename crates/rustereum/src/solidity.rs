@@ -1,9 +1,50 @@
+//! Solidity codegen: lowering the [`ir`](crate::ir) to Solidity source text.
+//!
+//! This is the middle stage of the [pipeline](crate#the-compilation-pipeline).
+//! [`lower_solidity`] takes a [`Contract`] and produces a
+//! complete `.sol` file (license + pragma, imports, `contract Name is Parent`,
+//! state variables, constructor with base initializers, and `public` methods).
+//! The [`driver`](crate::driver) then hands that text to `solc`.
+//!
+//! Identifiers written `snake_case` in the DSL (fields, params, method and
+//! modifier names) are converted to `camelCase` here so ABI selectors read
+//! idiomatically; parent contract names are emitted verbatim.
+
 use crate::ir::{AssignOp, BinOp, Constructor, Contract, Expr, Method, Parent, Place, Stmt, Type};
 
-/// Lower a `Contract` IR to Solidity source, including inheritance
-/// (imports + `is Parent`), an optional constructor with base initializers,
-/// and per-method modifiers. rustereum identifiers (including modifier names)
-/// are converted to camelCase; parent contract names are emitted verbatim.
+/// Lower a [`Contract`] IR to Solidity source.
+///
+/// The emitted file includes the SPDX license and `pragma`, an `import` per
+/// parent plus an `is Parent` clause, state variables, an optional constructor
+/// (with `Parent(args...)` base initializers), and each method as a `public`
+/// function (`view` when non-mutating with a return, plus any inherited
+/// modifiers). Identifiers are camelCased; parent names are verbatim.
+///
+/// # Example
+///
+/// Lowering the counter contract (one `u256` field, `increment`, `get`) yields:
+///
+/// ```text
+/// // SPDX-License-Identifier: MIT
+/// pragma solidity ^0.8.28;
+///
+/// contract Counter {
+///     uint256 count;
+///
+///     function increment() public {
+///         count += 1;
+///     }
+///
+///     function get() public view returns (uint256) {
+///         return count;
+///     }
+/// }
+/// ```
+///
+/// An inheriting contract additionally gets the import, the `is` clause, and a
+/// base initializer, e.g. `contract Counter is Ownable { ... constructor(address
+/// initialOwner) Ownable(initialOwner) {} ... function increment() public
+/// onlyOwner { ... } }`.
 pub fn lower_solidity(c: &Contract) -> String {
     let mut out = String::new();
     out.push_str("// SPDX-License-Identifier: MIT\n");

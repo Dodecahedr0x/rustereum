@@ -1,12 +1,24 @@
 //! In-process EVM harness for end-to-end testing of compiled contracts.
 //!
-//! Compiled only when the `testing` feature is enabled, so it can be reused
-//! from other crates' tests without pulling `revm` into normal builds.
+//! This module provides the `revm`-backed implementation of the
+//! [`Vm`] trait that the generated test clients drive. It is
+//! compiled only when the `testing` feature is enabled, which keeps `revm`
+//! optional — the abstraction in [`vm`](crate::vm) and the generated client
+//! itself build without it — while still letting other crates' tests reuse the
+//! harness by turning the feature on.
+//!
+//! The whole surface is: revm's [`InMemoryDB`] (re-exported so callers don't
+//! depend on `revm` directly) and the [`Vm`] impl on it below.
+//! The impl auto-funds any caller/deployer that isn't already present, so tests
+//! can pick arbitrary addresses without setting up balances.
 
 use alloy_primitives::Address;
 use revm::primitives::{AccountInfo, Bytes, ExecutionResult, Output, TxKind, U256 as RevmU256};
 use revm::Evm;
 
+/// revm's in-memory state database, re-exported as the concrete
+/// [`Vm`] used in tests. Construct one with
+/// `InMemoryDB::default()`.
 pub use revm::InMemoryDB;
 
 use crate::vm::{Revert, Vm};
@@ -44,6 +56,10 @@ fn run_tx(db: &mut InMemoryDB, caller: Address, kind: TxKind, data: Bytes) -> Ex
         .expect("evm execution error")
 }
 
+/// Drives compiled contracts against a persistent [`InMemoryDB`]: deploys via a
+/// `CREATE` transaction and calls via a `CALL` transaction, each caller/deployer
+/// auto-funded on first use. State is committed to the DB, so successive calls
+/// see prior storage and nonce changes.
 impl Vm for InMemoryDB {
     fn deploy_code(&mut self, deployer: Address, init_code: &[u8]) -> Address {
         fund_if_absent(self, deployer);

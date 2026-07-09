@@ -1,4 +1,29 @@
-//! The `rustereum` CLI: scaffold projects and import Solidity dependencies.
+//! The `rustereum` command-line binary: scaffold projects and manage Solidity
+//! dependencies.
+//!
+//! This is a thin `clap` wrapper; all real work lives in the `rustereum_cli`
+//! library so it can be unit-tested directly. Three subcommands are exposed:
+//!
+//! ```console
+//! $ rustereum new my-project                                        # scaffold a project
+//! $ cd my-project
+//! $ rustereum add OpenZeppelin/openzeppelin-contracts --ref v5.1.0  # import a dependency
+//! $ rustereum fetch                                                 # reproduce deps from rustereum.toml
+//! ```
+//!
+//! - `new <name> [--force]` — scaffold a fresh project in `./<name>`
+//!   (`rustereum_cli::scaffold_new`). Refuses a non-empty directory unless
+//!   `--force`.
+//! - `add <owner/repo> [--ref <tag>]` — clone a GitHub Solidity dependency,
+//!   record it in `rustereum.toml`, write its remapping, and generate Rust trait
+//!   bindings (`rustereum_cli::add_dependency`).
+//! - `fetch` — clone every dependency declared in `rustereum.toml` and
+//!   regenerate `remappings.txt` (`rustereum_cli::fetch`); this is what CI runs.
+//!
+//! `add` and `fetch` resolve the project root by searching upward for
+//! `rustereum.toml` (`rustereum_cli::find_manifest_root`), so they work from any
+//! subdirectory. On success the process exits with [`ExitCode::SUCCESS`]; any
+//! error is printed to stderr and yields [`ExitCode::FAILURE`].
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -6,6 +31,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use rustereum_cli::{add_dependency, fetch, find_manifest_root, scaffold_new};
 
+/// Top-level command-line interface: a single required subcommand.
 #[derive(Parser)]
 #[command(
     name = "rustereum",
@@ -16,9 +42,11 @@ struct Cli {
     command: Commands,
 }
 
+/// The `rustereum` subcommands. Each variant's doc comment is surfaced by clap
+/// as the command's `--help` text.
 #[derive(Subcommand)]
 enum Commands {
-    /// Create a new rustereum project in ./<name>.
+    /// Create a new rustereum project in `./<name>`.
     New {
         /// Project name (also the directory created under the cwd).
         name: String,

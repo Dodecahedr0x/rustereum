@@ -2,7 +2,54 @@
 //! import, and Solidity → Rust trait binding generation.
 //!
 //! Everything here is plain functions so tests can call them directly; the
-//! `main.rs` binary is a thin clap wrapper around these.
+//! `main.rs` binary is a thin clap wrapper around these. The three subcommands
+//! map to public entry points:
+//!
+//! - `rustereum new`   → [`scaffold_new`]
+//! - `rustereum add`   → [`add_dependency`]
+//! - `rustereum fetch` → [`fetch`]
+//!
+//! # Dependency model
+//!
+//! Imported Solidity sources are **not committed**. They are declared in a
+//! [`Manifest`] (`rustereum.toml`, beside `Cargo.toml`) and cloned into a
+//! git-ignored `lib/` directory. `add` clones immediately and records the
+//! dependency; `fetch` reproduces every declared dependency from the manifest
+//! (this is what CI runs). Both regenerate `remappings.txt`, the file that tells
+//! `solc` how to resolve `import "@openzeppelin/..."` style paths.
+//!
+//! ## `rustereum.toml` schema
+//!
+//! ```toml
+//! [dependencies.openzeppelin-contracts]
+//! git = "https://github.com/OpenZeppelin/openzeppelin-contracts"
+//! rev = "v5.1.0"                                # optional tag/branch
+//! remap = "@openzeppelin/contracts/=contracts/"
+//! ```
+//!
+//! The table key (`openzeppelin-contracts`) is the `lib/` clone directory name.
+//! `remap` is `"<prefix>=<subpath>"`, where `<subpath>` is relative to the clone
+//! root; [`fetch`] expands it into the `remappings.txt` line
+//! `<prefix>=lib/<key>/<subpath>`. See [`Manifest`] and [`Dependency`].
+//!
+//! # Bindings and the `#[contract]` macro
+//!
+//! [`add_dependency`] also scans the cloned `.sol` files and, via
+//! [`generate_bindings`], writes one `pub trait` per Solidity
+//! contract/interface into `src/bindings.rs`. Each trait carries two consts:
+//!
+//! ```ignore
+//! pub trait Ownable {
+//!     const SOL_NAME: &'static str = "Ownable";
+//!     const SOL_IMPORT: &'static str = "@openzeppelin/contracts/access/Ownable.sol";
+//! }
+//! ```
+//!
+//! Implementing such a trait (`impl Ownable for MyContract {}`) is how a
+//! contract declares inheritance. The `#[contract]` macro reads `SOL_NAME` and
+//! `SOL_IMPORT` off the trait to emit the correct Solidity `import` and base
+//! name — so the macro never touches the filesystem, and the binding traits are
+//! the committed handoff between the CLI and the codegen.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -33,8 +80,11 @@ pub struct Dependency {
     pub remap: String,
 }
 
-/// Read `<project_root>/rustereum.toml`. Returns `Manifest::default()` if the
-/// file is absent; maps toml parse errors to `io::Error::other`.
+/// Read `<project_root>/rustereum.toml` into a [`Manifest`].
+///
+/// Returns [`Manifest::default`] (an empty dependency set) if the file is
+/// absent, so callers need not special-case a fresh project. TOML parse errors
+/// are mapped to [`io::Error::other`]. The inverse is [`write_manifest`].
 pub fn read_manifest(project_root: &Path) -> io::Result<Manifest> {
     let path = project_root.join("rustereum.toml");
     let text = match fs::read_to_string(&path) {
@@ -45,7 +95,10 @@ pub fn read_manifest(project_root: &Path) -> io::Result<Manifest> {
     toml::from_str(&text).map_err(|e| io::Error::other(format!("failed to parse {path:?}: {e}")))
 }
 
-/// Serialize `m` and write `<project_root>/rustereum.toml`.
+/// Serialize `m` and write it to `<project_root>/rustereum.toml`.
+///
+/// The inverse of [`read_manifest`]. Serialization failures are mapped to
+/// [`io::Error::other`].
 pub fn write_manifest(project_root: &Path, m: &Manifest) -> io::Result<()> {
     let text = toml::to_string_pretty(m)
         .map_err(|e| io::Error::other(format!("failed to serialize manifest: {e}")))?;
@@ -72,12 +125,23 @@ fn git_clone(url: &str, rev: Option<&str>, target: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Clone declared dependencies into `lib/` and (re)generate `remappings.txt`
-/// from `<project_root>/rustereum.toml`.
+/// Reproduce a project's Solidity dependencies from its [`Manifest`].
 ///
-/// Idempotent: existing clones under `lib/<name>` are skipped so `fetch` is
-/// safely re-runnable offline. Bindings (`src/bindings.rs`) are committed
-/// source and are left untouched.
+/// Reads `<project_root>/rustereum.toml`, clones every declared [`Dependency`]
+/// into `lib/<name>`, and (re)generates `remappings.txt`. This is the command
+/// CI runs before tests, and what you run after cloning a project. Each
+/// manifest `remap` of the form `"<prefix>=<subpath>"` becomes the
+/// `remappings.txt` line `<prefix>=lib/<name>/<subpath>`; lines are emitted in
+/// sorted key order (the [`BTreeMap`] iteration order) so output is
+/// deterministic.
+///
+/// Idempotent: existing clones under `lib/<name>` are skipped, so `fetch` is
+/// safely re-runnable offline. Unlike [`add_dependency`], `fetch` does **not**
+/// regenerate bindings — `src/bindings.rs` is committed source and is left
+/// untouched.
+///
+/// If the manifest declares no dependencies, this prints a note and returns
+/// `Ok(())` without writing `remappings.txt`.
 pub fn fetch(project_root: &Path) -> io::Result<()> {
     let manifest = read_manifest(project_root)?;
     if manifest.dependencies.is_empty() {
@@ -157,12 +221,25 @@ remappings.txt
 
 /// Scaffold a fresh rustereum project skeleton at `target_dir`.
 ///
-/// Creates `Cargo.toml`, `rustereum.toml`, `.gitignore`, `src/lib.rs` (a working
-/// template contract), and `src/bindings.rs`. `lib/` and `remappings.txt` are
-/// generated by `fetch` (and git-ignored), so they are not scaffolded here.
+/// Backs `rustereum new`. Creates:
 ///
-/// If `target_dir` already exists and is non-empty, this refuses unless
-/// `force` is set.
+/// ```text
+/// <target_dir>/
+/// ├── Cargo.toml         # `name`, with a placeholder rustereum dependency
+/// ├── rustereum.toml     # empty [dependencies] manifest (beside Cargo.toml)
+/// ├── .gitignore         # ignores /target, lib/, remappings.txt
+/// └── src/
+///     ├── lib.rs         # a working template Counter contract
+///     └── bindings.rs    # empty binding module (populated by `add`)
+/// ```
+///
+/// `lib/` and `remappings.txt` are generated by [`fetch`] (and git-ignored), so
+/// they are not scaffolded here. The generated `Cargo.toml` points `rustereum`
+/// at a placeholder version, since the crate is not yet published — consumers
+/// repoint it at a path/git dependency.
+///
+/// If `target_dir` already exists and is non-empty, this returns
+/// [`io::ErrorKind::AlreadyExists`] unless `force` is set.
 pub fn scaffold_new(target_dir: &Path, name: &str, force: bool) -> io::Result<()> {
     if target_dir.exists() {
         let non_empty = fs::read_dir(target_dir)?.next().is_some();
@@ -272,11 +349,25 @@ fn parse_identifier(s: &str) -> Option<String> {
 }
 
 /// Generate Rust trait bindings for every contract/interface found under
-/// `sol_root`. Each contract in `sol_root/<rel>` gets a trait whose
-/// `SOL_IMPORT` is `<remap_prefix><rel>`.
+/// `sol_root`, returned as the text of a bindings module.
 ///
-/// Duplicate trait names (same contract name in multiple files) are emitted
-/// once — the first occurrence wins.
+/// Every `contract`, `abstract contract`, and `interface` declared in a `.sol`
+/// file under `sol_root` gets one `pub trait` with two associated consts:
+///
+/// - `SOL_NAME` — the Solidity contract/interface name, and
+/// - `SOL_IMPORT` — the import path `<remap_prefix><rel>`, where `<rel>` is the
+///   file's path relative to `sol_root`.
+///
+/// These are exactly the consts the `#[contract]` macro reads when it lowers an
+/// `impl Trait for Contract {}` inheritance declaration into a Solidity
+/// `import` and base name. `remap_prefix` must therefore be the same import
+/// prefix registered in `remappings.txt` (e.g. `@openzeppelin/contracts/`), so
+/// the emitted `SOL_IMPORT` resolves through `solc`. See [`add_dependency`] for
+/// how the prefix and scan root are chosen.
+///
+/// Duplicate trait names (the same contract name declared in multiple files)
+/// are emitted once — the first occurrence wins. Library declarations
+/// (`library X`) are skipped.
 pub fn generate_bindings(sol_root: &Path, remap_prefix: &str) -> String {
     let mut out = bindings_header();
     let mut seen: Vec<String> = Vec::new();
@@ -354,8 +445,26 @@ fn repo_name(github_spec: &str) -> &str {
         .unwrap_or(github_spec)
 }
 
-/// Clone a GitHub Solidity dependency into `lib/<repo>`, register its
-/// remapping, and (re)generate its trait bindings into `src/bindings.rs`.
+/// Import a GitHub Solidity dependency: clone it, record it, remap it, and
+/// generate bindings.
+///
+/// Backs `rustereum add`. Given a `github_spec` of the form `owner/repo` and an
+/// optional git `git_ref` (tag or branch), this:
+///
+/// 1. `git clone`s `https://github.com/<spec>.git` into `lib/<repo>` (failing
+///    with [`io::ErrorKind::AlreadyExists`] if it is already present),
+/// 2. resolves the import remapping (OpenZeppelin is special-cased to the
+///    canonical `@openzeppelin/contracts/` prefix; a repo with a top-level
+///    `contracts/` directory maps `@<repo>/` to `lib/<repo>/contracts/`,
+///    otherwise to `lib/<repo>/`) and appends it to `remappings.txt` if absent,
+/// 3. records the dependency in `rustereum.toml` (via [`write_manifest`]) so
+///    [`fetch`] can reproduce it,
+/// 4. generates trait bindings for the newly cloned sources (via
+///    [`generate_bindings`]) and merges the new traits into `src/bindings.rs`,
+///    leaving any already-defined traits untouched.
+///
+/// If the clone contains no contracts/interfaces, it prints a warning and
+/// leaves the bindings file unchanged.
 pub fn add_dependency(
     project_root: &Path,
     github_spec: &str,
@@ -487,8 +596,13 @@ fn merge_bindings(path: &Path, generated: &str) -> io::Result<()> {
     fs::write(path, merged)
 }
 
-/// Locate a project root: `start` if it contains `remappings.txt`, otherwise
-/// walk upward until one is found. Falls back to `start` if none exists.
+/// Locate a project root by searching upward for `remappings.txt`.
+///
+/// Returns `start` if it contains `remappings.txt`, otherwise walks up the
+/// parent chain until one is found. Falls back to `start` if no ancestor has
+/// one. Compare [`find_manifest_root`], which keys off `rustereum.toml`
+/// instead — the CLI subcommands use the manifest-based root, since
+/// `remappings.txt` is git-ignored and may not exist before a `fetch`.
 pub fn find_project_root(start: &Path) -> PathBuf {
     let mut dir = start;
     loop {
@@ -502,8 +616,13 @@ pub fn find_project_root(start: &Path) -> PathBuf {
     }
 }
 
-/// Locate a project root by searching upward for `rustereum.toml`. Falls back
-/// to `start` if none exists.
+/// Locate a project root by searching upward for `rustereum.toml`.
+///
+/// Returns `start` if it contains `rustereum.toml`, otherwise walks up the
+/// parent chain until one is found; falls back to `start` if none exists. This
+/// is the root the `add` and `fetch` subcommands resolve from the current
+/// directory, so they work when invoked from a project subdirectory. Compare
+/// [`find_project_root`], which keys off `remappings.txt`.
 pub fn find_manifest_root(start: &Path) -> PathBuf {
     let mut dir = start;
     loop {

@@ -1,0 +1,32 @@
+# Render Blueprint — publishes the rustdoc API documentation as a free static site.
+# https://render.com/docs/blueprint-spec
+#
+# `cargo doc` only type-checks/compiles for docs; it does NOT run the contract
+# pipeline, so the build needs a Rust toolchain but no solc/network beyond crates.io.
+services:
+  - type: web
+    runtime: static
+    name: rustereum-docs
+    buildCommand: |
+      set -euo pipefail
+      # Render's static-site build image has no Rust toolchain; install one.
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --default-toolchain stable --profile minimal
+      . "$HOME/.cargo/env"
+      # Document the workspace crates (not their dependencies). The `testing`
+      # feature is enabled so the revm-backed `testing` module is included.
+      cargo doc --no-deps --workspace --features rustereum/testing
+      # rustdoc has no root landing page; redirect / to the library crate's docs.
+      printf '<!doctype html><meta http-equiv="refresh" content="0; url=rustereum/index.html">\n' \
+        > target/doc/index.html
+    staticPublishPath: ./target/doc
+    # Docs are immutable per build; cache aggressively.
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: public, max-age=3600
+    # Serve the redirect page for unknown paths.
+    routes:
+      - type: rewrite
+        source: /rustereum
+        destination: /rustereum/index.html

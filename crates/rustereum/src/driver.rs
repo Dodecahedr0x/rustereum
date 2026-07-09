@@ -1,3 +1,27 @@
+//! The compile driver: [`ir`](crate::ir) → Solidity → `solc` → bytecode + ABI.
+//!
+//! This is the last stage of the [pipeline](crate#the-compilation-pipeline).
+//! [`compile_contract`] (and [`compile_contract_with`]) lower a
+//! [`Contract`] to Solidity via
+//! [`lower_solidity`](crate::solidity::lower_solidity), invoke `solc` (obtained
+//! and pinned by [`foundry-compilers`](https://crates.io/crates/foundry-compilers)
+//! via svm), and return an [`Artifact`]. Along the way three files are written
+//! to `target/rustereum/`:
+//!
+//! - `<Name>.sol` — the generated Solidity (written *before* solc runs, so a
+//!   compile failure still leaves it for inspection),
+//! - `<Name>.yul` — solc's Yul IR, dumped for inspection,
+//! - `<Name>.json` — the deployment bytecode + ABI.
+//!
+//! Solidity imports (for inherited OpenZeppelin sources) are resolved through a
+//! project's `remappings.txt`; [`compile_contract`] discovers the project root
+//! by searching upward for that file, while [`compile_contract_with`] takes it
+//! explicitly via [`CompileOptions`].
+//!
+//! In practice a `#[contract]` type is compiled through the macro-generated
+//! `Contract::compile()` / `Contract::compile_with(&opts)`, which call these
+//! functions for you.
+
 use crate::ir::Contract;
 use foundry_compilers::solc::Solc;
 use semver::Version;
@@ -6,20 +30,29 @@ use std::path::PathBuf;
 /// solc version fetched/pinned by foundry-compilers (via svm) for compilation.
 const SOLC_VERSION: &str = "0.8.28";
 
-/// A compiled contract: the Solidity source and solc-generated Yul (IR) that
-/// were written to disk, plus the resulting creation (deployment) bytecode and
-/// ABI.
+/// A compiled contract: the paths written to disk plus the resulting bytecode
+/// and ABI. Returned by [`compile_contract`] / [`compile_contract_with`].
 pub struct Artifact {
+    /// The contract name (matches [`Contract::name`]).
     pub name: String,
+    /// Path to the generated Solidity source (`target/rustereum/<Name>.sol`).
     pub sol_path: PathBuf,
+    /// Path to solc's dumped Yul IR (`target/rustereum/<Name>.yul`).
     pub yul_path: PathBuf,
+    /// The creation (deployment) bytecode.
     pub bytecode: Vec<u8>,
+    /// The contract ABI as JSON (a JSON array of ABI entries).
     pub abi: serde_json::Value,
 }
 
+/// An error from [`compile_contract`] / [`compile_contract_with`].
 #[derive(Debug)]
 pub enum CompileError {
+    /// A filesystem error writing the `.sol`/`.yul`/`.json` artifacts.
     Io(std::io::Error),
+    /// A solc-side failure: solc could not be obtained, compilation reported
+    /// fatal errors, or the expected contract/bytecode was missing from the
+    /// output. The string includes a hint pointing at `target/rustereum/<Name>.sol`.
     Solc(String),
 }
 
@@ -53,18 +86,26 @@ fn target_dir() -> PathBuf {
 
 /// Options controlling how a contract is compiled: primarily the project root
 /// used to resolve Solidity imports (via `remappings.txt`) against vendored
-/// dependency sources (e.g. OpenZeppelin).
+/// dependency sources (e.g. OpenZeppelin). Passed to [`compile_contract_with`].
 pub struct CompileOptions {
+    /// The project root under which `remappings.txt` is read. Remapping targets
+    /// are resolved relative to this directory and made absolute so solc finds
+    /// vendored dependency sources regardless of the current directory.
     pub project_root: PathBuf,
 }
 
 /// Lower `c` to Solidity, write it to disk, then compile it to EVM bytecode via
 /// foundry-compilers (solc, standard-JSON `language: "Solidity"`). The
-/// solc-generated Yul (IR) is dumped alongside for inspection.
+/// solc-generated Yul (IR) is dumped alongside for inspection. Returns an
+/// [`Artifact`].
 ///
 /// The project root is discovered by searching upward from the current
 /// directory for a `remappings.txt`; if none is found the current directory is
-/// used (standalone contracts need no remappings).
+/// used (standalone contracts need no remappings). Use
+/// [`compile_contract_with`] to set the project root explicitly.
+///
+/// Contracts usually call the macro-generated `Contract::compile()` instead of
+/// this directly.
 pub fn compile_contract(c: &Contract) -> Result<Artifact, CompileError> {
     let project_root = find_project_root();
     compile_contract_with(c, &CompileOptions { project_root })
@@ -123,8 +164,14 @@ fn find_project_root() -> PathBuf {
 }
 
 /// Like [`compile_contract`], but resolves Solidity imports using the project's
-/// `remappings.txt` (under `opts.project_root`), with remapping targets made
-/// absolute so vendored dependency sources (e.g. OpenZeppelin) are found.
+/// `remappings.txt` (under [`opts.project_root`](CompileOptions::project_root)),
+/// with remapping targets made absolute so vendored dependency sources (e.g.
+/// OpenZeppelin) are found.
+///
+/// This is the workhorse both [`compile_contract`] and the macro-generated
+/// `Contract::compile_with(&opts)` delegate to. On failure it returns a
+/// [`CompileError`]; the generated `.sol` is written before solc runs, so it
+/// remains at `target/rustereum/<Name>.sol` for inspection even on error.
 pub fn compile_contract_with(
     c: &Contract,
     opts: &CompileOptions,
