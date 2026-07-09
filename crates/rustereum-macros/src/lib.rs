@@ -506,6 +506,14 @@ fn build_client(self_ty: &syn::Type, i: &syn::ItemImpl) -> Result<TokenStream2, 
         quote! { let mut __code = artifact.bytecode.clone(); }
     };
 
+    // Resolve the caller crate's manifest dir at macro-expansion time and bake
+    // it as a plain string literal. (A proc macro reads the *caller's*
+    // `CARGO_MANIFEST_DIR` from its environment.) This avoids emitting `env!(..)`
+    // into the generated code — rust-analyzer can fail to eagerly expand
+    // built-in macros inside proc-macro output, which would drop the whole
+    // expansion (hiding `compile`/`deploy`).
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
+
     Ok(quote! {
         // Generated test client: not every deploy/method is exercised by every
         // test, so suppress dead-code warnings on this scaffolding.
@@ -525,7 +533,7 @@ fn build_client(self_ty: &syn::Type, i: &syn::ItemImpl) -> Result<TokenStream2, 
                 ::rustereum::driver::CompileError,
             > {
                 #name_ident::compile_with(&::rustereum::driver::CompileOptions {
-                    project_root: ::std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+                    project_root: ::std::path::PathBuf::from(#manifest_dir),
                 })
             }
 
