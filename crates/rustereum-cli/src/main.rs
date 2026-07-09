@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use rustereum_cli::{add_dependency, find_project_root, scaffold_new};
+use rustereum_cli::{add_dependency, fetch, find_manifest_root, find_project_root, scaffold_new};
 
 #[derive(Parser)]
 #[command(
@@ -34,6 +34,8 @@ enum Commands {
         #[arg(long = "ref")]
         git_ref: Option<String>,
     },
+    /// Clone deps declared in rustereum.toml and regenerate remappings.txt.
+    Fetch,
 }
 
 fn main() -> ExitCode {
@@ -53,6 +55,13 @@ fn main() -> ExitCode {
             let root = find_project_root(&cwd);
             add_dependency(&root, &github_spec, git_ref.as_deref()).map(|_| {
                 println!("Added {github_spec} to {}", root.display());
+            })
+        }
+        Commands::Fetch => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let root = find_manifest_root(&cwd);
+            fetch(&root).map(|_| {
+                println!("Fetched dependencies for {}", root.display());
             })
         }
     };

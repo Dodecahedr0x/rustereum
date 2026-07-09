@@ -4,10 +4,116 @@
 //! Everything here is plain functions so tests can call them directly; the
 //! `main.rs` binary is a thin clap wrapper around these.
 
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// The `rustereum.toml` manifest: the committed, reproducible record of a
+/// project's Solidity git dependencies. `rustereum fetch` reads this to clone
+/// declared deps and regenerate `remappings.txt`.
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct Manifest {
+    #[serde(default)]
+    pub dependencies: BTreeMap<String, Dependency>,
+}
+
+/// A single Solidity git dependency entry in `rustereum.toml`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Dependency {
+    /// Repository URL to clone.
+    pub git: String,
+    /// Optional tag/branch (used as `git clone --branch <rev>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+    /// Remapping spec `"<prefix>=<subpath>"` where `<subpath>` is relative to
+    /// the clone root.
+    pub remap: String,
+}
+
+/// Read `<project_root>/rustereum.toml`. Returns `Manifest::default()` if the
+/// file is absent; maps toml parse errors to `io::Error::other`.
+pub fn read_manifest(project_root: &Path) -> io::Result<Manifest> {
+    let path = project_root.join("rustereum.toml");
+    let text = match fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Manifest::default()),
+        Err(e) => return Err(e),
+    };
+    toml::from_str(&text).map_err(|e| io::Error::other(format!("failed to parse {path:?}: {e}")))
+}
+
+/// Serialize `m` and write `<project_root>/rustereum.toml`.
+pub fn write_manifest(project_root: &Path, m: &Manifest) -> io::Result<()> {
+    let text = toml::to_string_pretty(m)
+        .map_err(|e| io::Error::other(format!("failed to serialize manifest: {e}")))?;
+    fs::write(project_root.join("rustereum.toml"), text)
+}
+
+/// Run `git clone --depth 1 [--branch <rev>] <url> <target>`.
+fn git_clone(url: &str, rev: Option<&str>, target: &Path) -> io::Result<()> {
+    let mut cmd = Command::new("git");
+    cmd.arg("clone").arg("--depth").arg("1");
+    if let Some(r) = rev {
+        cmd.arg("--branch").arg(r);
+    }
+    cmd.arg(url).arg(target);
+
+    let status = cmd
+        .status()
+        .map_err(|e| io::Error::other(format!("failed to run git: {e}")))?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "git clone of {url} failed (status {status})"
+        )));
+    }
+    Ok(())
+}
+
+/// Clone declared dependencies into `lib/` and (re)generate `remappings.txt`
+/// from `<project_root>/rustereum.toml`.
+///
+/// Idempotent: existing clones under `lib/<name>` are skipped so `fetch` is
+/// safely re-runnable offline. Bindings (`src/bindings.rs`) are committed
+/// source and are left untouched.
+pub fn fetch(project_root: &Path) -> io::Result<()> {
+    let manifest = read_manifest(project_root)?;
+    if manifest.dependencies.is_empty() {
+        eprintln!("no dependencies declared in rustereum.toml — nothing to fetch");
+        return Ok(());
+    }
+
+    fs::create_dir_all(project_root.join("lib"))?;
+
+    // BTreeMap iterates sorted by key, so remapping lines are deterministic.
+    let mut remap_lines = Vec::new();
+    for (name, dep) in &manifest.dependencies {
+        let clone_target = project_root.join("lib").join(name);
+        if clone_target.exists() {
+            eprintln!(
+                "skipping {name}: already present at {}",
+                clone_target.display()
+            );
+        } else {
+            git_clone(&dep.git, dep.rev.as_deref(), &clone_target)?;
+        }
+
+        let (prefix, subpath) = dep.remap.split_once('=').ok_or_else(|| {
+            io::Error::other(format!(
+                "invalid remap for {name}: {:?} (expected \"prefix=subpath\")",
+                dep.remap
+            ))
+        })?;
+        remap_lines.push(format!("{prefix}=lib/{name}/{subpath}"));
+    }
+
+    let mut contents = remap_lines.join("\n");
+    contents.push('\n');
+    fs::write(project_root.join("remappings.txt"), contents)?;
+    Ok(())
+}
 
 /// The template contract dropped into a fresh project's `src/lib.rs`.
 const TEMPLATE_LIB: &str = r#"//! A rustereum project. Edit this contract or add your own modules.
@@ -257,27 +363,33 @@ pub fn add_dependency(
         "https://github.com/{}.git",
         github_spec.trim_end_matches(".git")
     );
-    let mut cmd = Command::new("git");
-    cmd.arg("clone").arg("--depth").arg("1");
-    if let Some(r) = git_ref {
-        cmd.arg("--branch").arg(r);
-    }
-    cmd.arg(&url).arg(&clone_target);
-
-    let status = cmd
-        .status()
-        .map_err(|e| io::Error::other(format!("failed to run git: {e}")))?;
-    if !status.success() {
-        return Err(io::Error::other(format!(
-            "git clone of {url} failed (status {status})"
-        )));
-    }
+    git_clone(&url, git_ref, &clone_target)?;
 
     let remap = resolve_remap(project_root, repo);
 
     // Append the remapping line if not already present (idempotent).
     let remap_line = format!("{}={}", remap.prefix, remap.target);
     append_line_if_absent(&project_root.join("remappings.txt"), &remap_line)?;
+
+    // Record the dependency into rustereum.toml so `fetch` can reproduce it.
+    // The manifest is the committed, reproducible record even though `add`
+    // clones immediately. `remap.target` is `lib/<repo>/<subpath>`; strip the
+    // `lib/<repo>/` prefix to store the clone-relative subpath.
+    let subpath = remap
+        .target
+        .strip_prefix(&format!("lib/{repo}/"))
+        .unwrap_or(&remap.target)
+        .to_string();
+    let mut manifest = read_manifest(project_root)?;
+    manifest.dependencies.insert(
+        repo.to_string(),
+        Dependency {
+            git: url.clone(),
+            rev: git_ref.map(str::to_string),
+            remap: format!("{}={}", remap.prefix, subpath),
+        },
+    );
+    write_manifest(project_root, &manifest)?;
 
     // Generate bindings for the newly added dependency.
     let generated = generate_bindings(&remap.sol_root, &remap.prefix);
@@ -367,6 +479,21 @@ pub fn find_project_root(start: &Path) -> PathBuf {
     let mut dir = start;
     loop {
         if dir.join("remappings.txt").exists() {
+            return dir.to_path_buf();
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => return start.to_path_buf(),
+        }
+    }
+}
+
+/// Locate a project root by searching upward for `rustereum.toml`. Falls back
+/// to `start` if none exists.
+pub fn find_manifest_root(start: &Path) -> PathBuf {
+    let mut dir = start;
+    loop {
+        if dir.join("rustereum.toml").exists() {
             return dir.to_path_buf();
         }
         match dir.parent() {
