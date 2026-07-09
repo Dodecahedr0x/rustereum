@@ -1,6 +1,8 @@
 //! Ownable counter — inherits OpenZeppelin `Ownable`; `increment()` is gated by
 //! the inherited `onlyOwner` modifier. Compiling drops target/rustereum/Counter.sol.
 
+pub mod bindings;
+
 use crate::bindings::Ownable;
 use rustereum::prelude::*;
 

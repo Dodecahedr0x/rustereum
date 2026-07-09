@@ -1,6 +1,13 @@
 [workspace]
 resolver = "2"
-members = ["crates/rustereum", "crates/rustereum-macros", "crates/rustereum-cli", "examples"]
+members = [
+    "crates/rustereum",
+    "crates/rustereum-macros",
+    "crates/rustereum-cli",
+    "examples/counter",
+    "examples/adder",
+    "examples/ownable-counter",
+]
 
 [workspace.dependencies]
 syn = { version = "2", features = ["full"] }
