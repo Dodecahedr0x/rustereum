@@ -1,5 +1,4 @@
-use rustereum::assemble_inheriting;
-use rustereum::driver::{compile_contract_with, CompileOptions};
+use rustereum::driver::CompileOptions;
 use rustereum::prelude::*;
 use rustereum::testing::InMemoryDB;
 use rustereum::vm::{Address, U256};
@@ -40,7 +39,7 @@ fn ownable_access_control() {
         project_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/project"),
     };
-    let artifact = compile_contract_with(&assemble_inheriting::<Counter>(), &opts).unwrap();
+    let artifact = Counter::compile_with(&opts).unwrap();
 
     let owner = Address::from([0x33u8; 20]); // distinct from DEPLOYER
     let stranger = Address::from([0x22u8; 20]);

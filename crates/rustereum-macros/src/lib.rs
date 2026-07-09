@@ -505,6 +505,34 @@ fn build_client(self_ty: &syn::Type, i: &syn::ItemImpl) -> Result<TokenStream2, 
         }
 
         impl #name_ident {
+            /// Assemble and compile this contract to an EVM artifact using the
+            /// default project root (the current working directory).
+            pub fn compile() -> ::core::result::Result<
+                ::rustereum::driver::Artifact,
+                ::rustereum::driver::CompileError,
+            > {
+                let __ir = ::rustereum::assemble_from::<#name_ident>({
+                    use ::rustereum::InheritsFallback as _;
+                    ::rustereum::InheritsProbe::<#name_ident>(::core::marker::PhantomData).rustereum_parents()
+                });
+                ::rustereum::driver::compile_contract(&__ir)
+            }
+
+            /// Like [`compile`], but resolves Solidity imports using the given
+            /// [`CompileOptions`] (e.g. an explicit project root).
+            pub fn compile_with(
+                opts: &::rustereum::driver::CompileOptions,
+            ) -> ::core::result::Result<
+                ::rustereum::driver::Artifact,
+                ::rustereum::driver::CompileError,
+            > {
+                let __ir = ::rustereum::assemble_from::<#name_ident>({
+                    use ::rustereum::InheritsFallback as _;
+                    ::rustereum::InheritsProbe::<#name_ident>(::core::marker::PhantomData).rustereum_parents()
+                });
+                ::rustereum::driver::compile_contract_with(&__ir, opts)
+            }
+
             /// Deploy the compiled contract and return a typed client.
             pub fn deploy(
                 vm: &mut impl ::rustereum::vm::Vm,

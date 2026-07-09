@@ -26,14 +26,12 @@ impl Adder {
 #[cfg(test)]
 mod tests {
     use super::Adder;
-    use rustereum::assemble;
-    use rustereum::driver::compile_contract;
     use rustereum::testing::InMemoryDB;
     use rustereum::vm::{DEPLOYER, U256};
 
     #[test]
     fn adder_end_to_end() {
-        let art = compile_contract(&assemble::<Adder>()).expect("compile");
+        let art = Adder::compile().expect("compile");
         let mut evm = InMemoryDB::default();
         let adder = Adder::deploy(&mut evm, &art);
         assert_eq!(adder.get(&mut evm), U256::from(0));

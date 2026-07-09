@@ -24,14 +24,12 @@ impl Counter {
 #[cfg(test)]
 mod tests {
     use super::Counter;
-    use rustereum::assemble;
-    use rustereum::driver::compile_contract;
     use rustereum::testing::InMemoryDB;
     use rustereum::vm::{DEPLOYER, U256};
 
     #[test]
     fn counter_end_to_end() {
-        let art = compile_contract(&assemble::<Counter>()).expect("compile");
+        let art = Counter::compile().expect("compile");
         let mut evm = InMemoryDB::default();
         let counter = Counter::deploy(&mut evm, &art);
         assert_eq!(counter.get(&mut evm), U256::from(0));
