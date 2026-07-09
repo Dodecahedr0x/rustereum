@@ -62,7 +62,7 @@ pub fn compile_contract(c: &Contract) -> Result<Artifact, CompileError> {
     let source_name = format!("{}.yul", c.name);
     let input = serde_json::json!({
         "language": "Yul",
-        "sources": { source_name: { "content": yul } },
+        "sources": { source_name.clone(): { "content": yul } },
         "settings": {
             "outputSelection": { "*": { "*": ["evm.bytecode.object", "abi"], "": ["*"] } },
             "optimizer": { "enabled": true, "details": { "yul": true } }
@@ -101,17 +101,17 @@ pub fn compile_contract(c: &Contract) -> Result<Artifact, CompileError> {
         }
     }
 
-    // Navigate: contracts -> <file> -> <contract> -> evm.bytecode.object
+    // Navigate: contracts -> <file> -> <contract> -> evm.bytecode.object.
+    // Index explicitly by the source file name and object name rather than
+    // grabbing the first entry, so this is robust regardless of ordering.
     let contract = output
         .get("contracts")
-        .and_then(|c| c.as_object())
-        .and_then(|files| files.values().next())
-        .and_then(|file| file.as_object())
-        .and_then(|contracts| contracts.values().next())
+        .and_then(|files| files.get(&source_name))
+        .and_then(|file| file.get(&c.name))
         .ok_or_else(|| {
             CompileError::Solc(format!(
-                "no contract in solc output; inspect target/rustereum/{}.yul",
-                c.name
+                "solc output missing contract {} in {}; inspect target/rustereum/{}.yul",
+                c.name, source_name, c.name
             ))
         })?;
 
@@ -159,7 +159,7 @@ pub fn compile_contract(c: &Contract) -> Result<Artifact, CompileError> {
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     (0..s.len())

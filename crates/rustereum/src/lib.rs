@@ -40,3 +40,23 @@ impl core::ops::AddAssign<u64> for u256 {
         self.0 += alloy_primitives::U256::from(rhs);
     }
 }
+
+// The `+` operator impls below exist so DSL bodies that use binary `+`
+// (e.g. `a + b`, `self.total + 10`) type-check as native Rust. The real
+// on-chain semantics come from the generated Yul (`add(...)`), not these.
+
+// u256 + u256
+impl core::ops::Add for u256 {
+    type Output = u256;
+    fn add(self, rhs: u256) -> u256 {
+        u256(self.0 + rhs.0)
+    }
+}
+
+// u256 + <integer literal> (literal infers to u64)
+impl core::ops::Add<u64> for u256 {
+    type Output = u256;
+    fn add(self, rhs: u64) -> u256 {
+        u256(self.0 + alloy_primitives::U256::from(rhs))
+    }
+}

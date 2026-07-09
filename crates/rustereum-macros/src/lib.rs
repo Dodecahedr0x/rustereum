@@ -96,7 +96,12 @@ fn expand_impl(i: syn::ItemImpl) -> TokenStream {
             }
         }
         .into(),
-        Err(e) => e.to_compile_error().into(),
+        Err(e) => {
+            let err = e.to_compile_error();
+            // Re-emit the original impl so downstream "no method named…"
+            // errors don't cascade from the method bodies going missing.
+            quote! { #i #err }.into()
+        }
     }
 }
 
