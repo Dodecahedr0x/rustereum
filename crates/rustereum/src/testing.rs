@@ -21,6 +21,28 @@ fn selector(sig: &str) -> [u8; 4] {
     [out[0], out[1], out[2], out[3]]
 }
 
+/// An ABI argument value for constructor/call encoding. Only the two types the
+/// tests need (YAGNI); each encodes to a single 32-byte head word.
+pub enum Token {
+    Address(Address),
+    U256(U256),
+}
+
+/// ABI-encode a slice of tokens as concatenated 32-byte head words: an address
+/// is left-padded to 32 bytes; a u256 is 32-byte big-endian.
+fn encode_tokens(tokens: &[Token]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(tokens.len() * 32);
+    for token in tokens {
+        let mut word = [0u8; 32];
+        match token {
+            Token::Address(addr) => word[12..].copy_from_slice(addr.as_slice()),
+            Token::U256(v) => word.copy_from_slice(&v.to_be_bytes::<32>()),
+        }
+        out.extend_from_slice(&word);
+    }
+    out
+}
+
 /// A tiny EVM sandbox backed by an in-memory database.
 pub struct TestEvm {
     db: InMemoryDB,
@@ -46,9 +68,29 @@ impl TestEvm {
         Self { db }
     }
 
+    /// Insert a funded externally-owned account for `addr` (same mechanism
+    /// `new()` uses for the default caller), so it can be used as a tx sender.
+    pub fn fund(&mut self, addr: Address) {
+        self.db.insert_account_info(
+            addr,
+            AccountInfo {
+                balance: RevmU256::from(u128::MAX),
+                ..Default::default()
+            },
+        );
+    }
+
     /// Deploy `bytecode` as init/creation code and return the contract address.
     pub fn deploy(&mut self, bytecode: &[u8]) -> Address {
-        let result = self.run(TxKind::Create, Bytes::copy_from_slice(bytecode));
+        self.deploy_with(bytecode, &[])
+    }
+
+    /// Deploy `bytecode` with ABI-encoded constructor `args` appended to the
+    /// init code, and return the created contract address.
+    pub fn deploy_with(&mut self, bytecode: &[u8], args: &[Token]) -> Address {
+        let mut data = bytecode.to_vec();
+        data.extend_from_slice(&encode_tokens(args));
+        let result = self.run(CALLER, TxKind::Create, Bytes::from(data));
         match result {
             ExecutionResult::Success {
                 output: Output::Create(_, Some(addr)),
@@ -60,15 +102,24 @@ impl TestEvm {
 
     /// Call `sig` (e.g. `"increment()"`) on `to`, expecting success.
     pub fn call(&mut self, to: Address, sig: &str) {
-        let result = self.run(TxKind::Call(to), Self::calldata(sig));
-        if !result.is_success() {
-            panic!("call `{sig}` failed: {result:?}");
+        self.call_from(CALLER, to, sig)
+            .unwrap_or_else(|()| panic!("call `{sig}` failed"));
+    }
+
+    /// Call `sig` on `to` from `caller`; return `Ok(())` on success and
+    /// `Err(())` on revert/halt (does not panic, so callers can assert on a
+    /// rejected access-controlled call).
+    pub fn call_from(&mut self, caller: Address, to: Address, sig: &str) -> Result<(), ()> {
+        let result = self.run(caller, TxKind::Call(to), Self::calldata(sig));
+        match result {
+            ExecutionResult::Success { .. } => Ok(()),
+            _ => Err(()),
         }
     }
 
     /// Call `sig` on `to` and decode the 32-byte return value as a `U256`.
     pub fn call_u256(&mut self, to: Address, sig: &str) -> U256 {
-        let result = self.run(TxKind::Call(to), Self::calldata(sig));
+        let result = self.run(CALLER, TxKind::Call(to), Self::calldata(sig));
         let output = match result {
             ExecutionResult::Success {
                 output: Output::Call(bytes),
@@ -85,12 +136,14 @@ impl TestEvm {
         Bytes::copy_from_slice(&selector(sig))
     }
 
-    /// Execute one transaction against the persistent DB, committing state.
-    fn run(&mut self, kind: TxKind, data: Bytes) -> ExecutionResult {
+    /// Execute one transaction (from `caller`) against the persistent DB,
+    /// committing state. Reverts/halts come back as normal `ExecutionResult`
+    /// variants (only genuine EVM errors panic).
+    fn run(&mut self, caller: Address, kind: TxKind, data: Bytes) -> ExecutionResult {
         Evm::builder()
             .with_db(&mut self.db)
             .modify_tx_env(|tx| {
-                tx.caller = CALLER;
+                tx.caller = caller;
                 tx.transact_to = kind;
                 tx.data = data;
                 tx.value = RevmU256::ZERO;
@@ -142,6 +195,82 @@ mod tests {
                 },
             ],
         }
+    }
+
+    fn ownable_counter_ir() -> Contract {
+        Contract {
+            name: "Counter".into(),
+            inherits: vec![Parent {
+                name: "Ownable".into(),
+                import_path: "@openzeppelin/contracts/access/Ownable.sol".into(),
+                base_args: vec!["initial_owner".into()],
+            }],
+            fields: vec![Field {
+                name: "count".into(),
+                ty: Type::U256,
+            }],
+            constructor: Some(Constructor {
+                params: vec![Param {
+                    name: "initial_owner".into(),
+                    ty: Type::Address,
+                }],
+                body: vec![],
+            }),
+            methods: vec![
+                Method {
+                    name: "increment".into(),
+                    mutates: true,
+                    params: vec![],
+                    ret: None,
+                    modifiers: vec!["onlyOwner".into()],
+                    body: vec![Stmt::Assign {
+                        target: Place::Storage("count".into()),
+                        op: AssignOp::Add,
+                        value: Expr::Literal(1),
+                    }],
+                },
+                Method {
+                    name: "get".into(),
+                    mutates: false,
+                    params: vec![],
+                    ret: Some(Type::U256),
+                    modifiers: vec![],
+                    body: vec![Stmt::Return(Expr::StorageLoad("count".into()))],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn ownable_counter_access_control() {
+        use crate::driver::{compile_contract_with, CompileOptions};
+        use crate::ir::*;
+        use alloy_primitives::{Address, U256};
+
+        let c = ownable_counter_ir();
+        let opts = CompileOptions {
+            project_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/project"),
+        };
+        let artifact = compile_contract_with(&c, &opts).unwrap();
+
+        let owner = Address::from([0x11u8; 20]);
+        let stranger = Address::from([0x22u8; 20]);
+
+        let mut evm = TestEvm::new();
+        evm.fund(owner);
+        evm.fund(stranger);
+        let addr = evm.deploy_with(&artifact.bytecode, &[Token::Address(owner)]);
+
+        // owner can increment
+        evm.call_from(owner, addr, "increment()")
+            .expect("owner should succeed");
+        assert_eq!(evm.call_u256(addr, "get()"), U256::from(1));
+
+        // stranger is rejected by onlyOwner
+        assert!(evm.call_from(stranger, addr, "increment()").is_err());
+        // state unchanged
+        assert_eq!(evm.call_u256(addr, "get()"), U256::from(1));
     }
 
     #[test]
