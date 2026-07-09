@@ -3,6 +3,7 @@ pub mod ir;
 pub mod solidity;
 #[cfg(feature = "testing")]
 pub mod testing;
+pub mod vm;
 
 pub mod prelude {
     pub use crate::u256;
